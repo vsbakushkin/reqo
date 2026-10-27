@@ -1,0 +1,3 @@
+name = "3. List again. The new task is there, with id 4"
+method = "GET"
+url = "localhost:3000/tasks"

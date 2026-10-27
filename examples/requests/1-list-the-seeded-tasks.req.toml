@@ -1,0 +1,6 @@
+name = "1. List the seeded tasks"
+method = "GET"
+url = "localhost:3000/tasks"
+
+[headers]
+Accept = "application/json"

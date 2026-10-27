@@ -1,0 +1,11 @@
+name = "2. Create a new one"
+method = "POST"
+url = "localhost:3000/tasks"
+body = """
+{
+  "title": "ship part two"
+}
+"""
+
+[headers]
+Content-Type = "application/json"

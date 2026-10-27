@@ -1,0 +1,10 @@
+name = "5. Mark it done"
+method = "PATCH"
+url = "localhost:3000/tasks/4"
+body = """
+{
+  "done": true
+}"""
+
+[headers]
+Content-Type = "application/json"

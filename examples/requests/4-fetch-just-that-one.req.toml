@@ -1,0 +1,3 @@
+name = "4. Fetch just that one"
+method = "GET"
+url = "localhost:3000/tasks/4"
