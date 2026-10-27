@@ -55,8 +55,11 @@ base = "http://localhost:8080"
 
 The workspace's file applies to every collection. A collection can have its own
 `reqo.env.toml` at its root: its environments are added to the workspace's, and
-its variables override those of the environment with the same name. Both files
-open from the menus via *Edit environments*.
+its variables override those of the environment with the same name.
+
+Edit both in the app: the environments button next to the URL, or *Edit
+environments* in the workspace and collection menus. Changes are saved as you
+type; comments in the files are not kept.
 
 ## Keys
 

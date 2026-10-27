@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::env_editor::{EnvEditor, EnvEditorEvent, Scope};
 use crate::settings::Settings;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -22,7 +23,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use reqo_core::collection::{self, Entry};
 use reqo_core::workspace::{self, Workspace};
-use reqo_core::{ENV_FILE, Environments, METHODS, Request, Response, Variables};
+use reqo_core::{Environments, METHODS, Request, Response, Variables};
 
 actions!(
     reqo,
@@ -43,18 +44,6 @@ pub const KEY_CONTEXT: &str = "Reqo";
 
 /// Workspace created on the first start.
 pub const DEFAULT_WORKSPACE: &str = "My Workspace";
-
-/// Written to a new environments file before it is opened for editing.
-const ENV_TEMPLATE: &str = "\
-# Environments: pick one next to the URL, then use {{name}} in URLs,
-# headers and bodies. Press Ctrl+R in reqo after editing.
-#
-# [dev]
-# base = \"http://localhost:8080\"
-#
-# [prod]
-# base = \"https://api.example.com\"
-";
 
 type MethodSelect = SelectState<Vec<&'static str>>;
 type EnvSelect = SelectState<Vec<SharedString>>;
@@ -147,6 +136,9 @@ pub struct ReqoApp {
 
     settings: Entity<Settings>,
 
+    /// Keeps the app in step with the open environments editor.
+    env_editor_subscription: Option<Subscription>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -218,6 +210,7 @@ impl ReqoApp {
             outcome: None,
             in_flight: None,
             settings,
+            env_editor_subscription: None,
             _subscriptions: subscriptions,
         };
         this.load(None, window, cx);
@@ -978,21 +971,50 @@ impl ReqoApp {
         );
     }
 
-    /// Opens the environments file of a workspace or collection folder in the
-    /// system editor, creating it from a template first.
+    /// Opens the environments editor on the workspace's or a collection's environments.
     fn edit_environments(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
-        let path = dir.join(ENV_FILE);
-        if !path.exists()
-            && let Err(err) = std::fs::write(&path, ENV_TEMPLATE)
-        {
-            notify_error(
-                anyhow::anyhow!("writing {}: {err}", path.display()),
-                window,
-                cx,
-            );
-            return;
+        let mut scopes = vec![Scope {
+            label: format!("Workspace “{}”", self.workspace.name).into(),
+            dir: self.workspace.dir.clone(),
+            hint: "Shared by every collection in the workspace.".into(),
+        }];
+        scopes.extend(self.collections.iter().map(|c| {
+            Scope {
+                label: format!("Collection “{}”", c.name).into(),
+                dir: c.dir.clone(),
+                hint: "Added to the workspace's environments. In an environment with the same \
+                   name, variables set here win."
+                    .into(),
+            }
+        }));
+        let scope = scopes.iter().position(|s| s.dir == dir).unwrap_or(0);
+        let editor = cx.new(|cx| EnvEditor::new(scopes, scope, window, cx));
+        self.env_editor_subscription = Some(cx.subscribe_in(
+            &editor,
+            window,
+            |this, _, EnvEditorEvent::Changed(dir), window, cx| this.reload_envs(dir, window, cx),
+        ));
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title("Environments")
+                .w(px(780.))
+                .child(editor.clone())
+        });
+    }
+
+    /// Re-reads the environments file in `dir`, the workspace's or a collection's.
+    fn reload_envs(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        let envs = Environments::load(dir).unwrap_or_else(|err| {
+            notify_error(err, window, cx);
+            Environments::default()
+        });
+        if dir == self.workspace.dir {
+            self.workspace_envs = envs;
+        } else if let Some(collection) = self.collections.iter_mut().find(|c| c.dir == dir) {
+            collection.envs = envs;
         }
-        cx.open_with_system(&path);
+        self.refresh_envs(window, cx);
+        cx.notify();
     }
 
     fn variables(&self, cx: &App) -> Variables {
@@ -1576,6 +1598,16 @@ impl ReqoApp {
                             .child(Select::new(&self.env_select).placeholder("No env")),
                     )
                 },
+            )
+            .child(
+                Button::new("environments")
+                    .ghost()
+                    .icon(IconName::Settings2)
+                    .tooltip("Environments")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let dir = this.workspace.dir.clone();
+                        this.edit_environments(&dir, window, cx)
+                    })),
             )
             .child(
                 Button::new("send")

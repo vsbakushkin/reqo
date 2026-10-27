@@ -1,4 +1,5 @@
 mod app;
+mod env_editor;
 mod settings;
 mod theme;
 

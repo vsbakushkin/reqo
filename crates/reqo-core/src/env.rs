@@ -35,12 +35,68 @@ impl Environments {
         Ok(Self { envs })
     }
 
+    /// Writes the environments to `dir`. Comments in an existing file are not kept.
+    pub fn save(&self, dir: &Path) -> Result<()> {
+        let path = dir.join(ENV_FILE);
+        let text = toml::to_string(&self.envs)?;
+        std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+    }
+
+    pub fn len(&self) -> usize {
+        self.envs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.envs.is_empty()
+    }
+
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.envs.keys().map(String::as_str)
     }
 
     pub fn variables(&self, name: &str) -> Option<&Variables> {
         self.envs.get(name)
+    }
+
+    /// Adds an empty environment named `base`, or `base-N` when taken, and returns its name.
+    pub fn add(&mut self, base: &str) -> String {
+        let name = (1..)
+            .map(|n| match n {
+                1 => base.to_string(),
+                n => format!("{base}-{n}"),
+            })
+            .find(|name| !self.envs.contains_key(name))
+            .expect("unbounded range");
+        self.envs.insert(name.clone(), Variables::new());
+        name
+    }
+
+    /// Replaces the variables of an existing environment.
+    pub fn set_variables(&mut self, name: &str, vars: Variables) {
+        if let Some(existing) = self.envs.get_mut(name) {
+            *existing = vars;
+        }
+    }
+
+    /// Renames an environment in place. Fails when `new` is empty or taken.
+    pub fn rename(&mut self, old: &str, new: &str) -> Result<()> {
+        let new = new.trim();
+        if new.is_empty() {
+            anyhow::bail!("the name is empty");
+        }
+        if new != old && self.envs.contains_key(new) {
+            anyhow::bail!("“{new}” already exists");
+        }
+        let Some(ix) = self.envs.get_index_of(old) else {
+            anyhow::bail!("no environment “{old}”");
+        };
+        let vars = self.envs.shift_remove(old).unwrap_or_default();
+        self.envs.shift_insert(ix, new.to_string(), vars);
+        Ok(())
+    }
+
+    pub fn remove(&mut self, name: &str) {
+        self.envs.shift_remove(name);
     }
 
     /// `self` with `overrides` on top: environments are matched by name, and
@@ -97,6 +153,34 @@ mod tests {
             substitute("{{missing}}/{{base", &vars),
             "{{missing}}/{{base"
         );
+    }
+
+    #[test]
+    fn edits_and_saves() {
+        let dir = std::env::temp_dir().join(format!("reqo-test-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut envs = Environments::default();
+        assert_eq!(envs.add("dev"), "dev");
+        assert_eq!(envs.add("dev"), "dev-2");
+        envs.set_variables(
+            "dev",
+            Variables::from_iter([("base".into(), "http://x".into())]),
+        );
+        assert!(envs.rename("dev-2", "dev").is_err());
+        assert!(envs.rename("dev-2", " ").is_err());
+        envs.rename("dev", "local").unwrap();
+        // Renaming keeps the position.
+        assert_eq!(envs.names().collect::<Vec<_>>(), ["local", "dev-2"]);
+        envs.save(&dir).unwrap();
+
+        let loaded = Environments::load(&dir).unwrap();
+        assert_eq!(loaded.names().collect::<Vec<_>>(), ["local", "dev-2"]);
+        assert_eq!(loaded.variables("local").unwrap()["base"], "http://x");
+        let mut loaded = loaded;
+        loaded.remove("local");
+        assert_eq!(loaded.len(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
