@@ -45,6 +45,11 @@ pub const KEY_CONTEXT: &str = "Reqo";
 /// Workspace created on the first start.
 pub const DEFAULT_WORKSPACE: &str = "My Workspace";
 
+/// Sidebar tree geometry, in pixels.
+const TREE_ROW_HEIGHT: f32 = 26.;
+const TREE_INDENT: f32 = 16.;
+const TREE_PAD: f32 = 4.;
+
 type MethodSelect = SelectState<Vec<&'static str>>;
 type EnvSelect = SelectState<Vec<SharedString>>;
 
@@ -80,6 +85,37 @@ struct Renaming {
     target: Target,
     input: Entity<InputState>,
     _subscription: Subscription,
+}
+
+/// A sidebar item being dragged to another folder or collection.
+#[derive(Debug, Clone)]
+enum Dragged {
+    Request(PathBuf),
+    Folder(PathBuf),
+}
+
+/// What follows the cursor while dragging: the item's label.
+struct DragPreview {
+    label: SharedString,
+}
+
+impl Render for DragPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .px_2()
+            .py_1()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
+            .text_color(theme.popover_foreground)
+            // Drawn outside the root view, so it does not inherit the UI font.
+            .font_family(theme.font_family.clone())
+            .text_size(px(13.))
+            .shadow_md()
+            .child(self.label.clone())
+    }
 }
 
 /// One line of the sidebar tree.
@@ -501,6 +537,42 @@ impl ReqoApp {
                 let selected = self.selected_path();
                 self.load(selected, window, cx);
                 self.start_rename(Target::Collection(ix), window, cx);
+            }
+            Err(err) => notify_error(err, window, cx),
+        }
+    }
+
+    /// Moves a dragged request or folder into `dir`, then reloads so paths stay right.
+    fn move_into(
+        &mut self,
+        dragged: &Dragged,
+        dir: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.save(&SaveRequest, window, cx);
+        let selected = self.selected_path();
+        let (from, result) = match dragged {
+            Dragged::Request(path) => {
+                let Some(sel) = self.find(path) else { return };
+                (
+                    path.clone(),
+                    collection::move_entry(self.entry(sel), dir).map(|e| e.path),
+                )
+            }
+            Dragged::Folder(path) => (path.clone(), collection::move_folder(path, dir)),
+        };
+        match result {
+            Ok(to) if to == from => {}
+            Ok(to) => {
+                let moved = |p: PathBuf| match p.strip_prefix(&from) {
+                    Ok(rest) if rest.as_os_str().is_empty() => to.clone(),
+                    Ok(rest) => to.join(rest),
+                    Err(_) => p,
+                };
+                self.collapsed = self.collapsed.drain().map(moved).collect();
+                self.expand(dir);
+                self.load(selected.map(moved), window, cx);
             }
             Err(err) => notify_error(err, window, cx),
         }
@@ -1214,7 +1286,6 @@ impl ReqoApp {
                     .overflow_y_scroll()
                     .px_1()
                     .pb_1()
-                    .gap_px()
                     .children(rows.into_iter().map(|row| match row {
                         Row::Collection(col) => self.render_collection(col, cx),
                         Row::Folder { col, path, depth } => self.render_folder(col, path, depth, cx),
@@ -1228,7 +1299,8 @@ impl ReqoApp {
                                 .text_color(cx.theme().muted_foreground)
                                 .child("No collections yet. Create one, or add a folder with request files."),
                         )
-                    }),
+                    })
+                    .child(self.render_tree_space(cx)),
             )
             .children(self.load_errors.iter().map(|error| {
                 div()
@@ -1237,6 +1309,29 @@ impl ReqoApp {
                     .text_color(cx.theme().danger)
                     .child(error.clone())
             }))
+    }
+
+    /// The empty space below the tree; right-click it for collection actions.
+    fn render_tree_space(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
+        div()
+            .id("tree-space")
+            .flex_1()
+            .min_h(px(48.))
+            .context_menu(move |menu, _, _| {
+                menu.item(menu_item(
+                    &this,
+                    "New collection",
+                    Some(IconName::FolderPlus),
+                    |this, window, cx| this.new_collection(window, cx),
+                ))
+                .item(menu_item(
+                    &this,
+                    "Add folder…",
+                    Some(IconName::FolderInput),
+                    |this, window, cx| this.add_folder(window, cx),
+                ))
+            })
     }
 
     /// Workspace name that opens the switcher and workspace actions.
@@ -1314,7 +1409,8 @@ impl ReqoApp {
         }
     }
 
-    /// Common look of sidebar rows, indented by `depth`.
+    /// Common look of sidebar rows: fixed height, indented by `depth`, with a
+    /// guide line for each level above.
     fn tree_row(
         &self,
         id: impl Into<ElementId>,
@@ -1326,14 +1422,26 @@ impl ReqoApp {
         let renaming = matches!(&self.renaming, Some(r) if r.target == *target);
         h_flex()
             .id(id)
-            .gap_1p5()
-            .pl(px(6. + depth as f32 * 14.))
+            .relative()
+            .h(px(TREE_ROW_HEIGHT))
+            .flex_none()
+            .gap_1()
+            .pl(px(TREE_PAD + depth as f32 * TREE_INDENT))
             .pr_2()
-            .py_1()
             .rounded(theme.radius)
-            .text_sm()
+            .text_size(px(13.))
             .cursor_pointer()
             .hover(|this| this.bg(theme.list_hover))
+            .children((0..depth).map(|level| {
+                // Centered under the chevron of the ancestor at `level`.
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(TREE_PAD + level as f32 * TREE_INDENT + TREE_INDENT / 2.))
+                    .w(px(1.))
+                    .bg(theme.border)
+            }))
             .when(renaming, |this| {
                 this.capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape" {
@@ -1342,6 +1450,51 @@ impl ReqoApp {
                     }
                 }))
             })
+    }
+
+    /// Lets requests and folders be dropped on the row, moving them into `dir`.
+    fn drop_into(&self, row: Stateful<Div>, dir: PathBuf, cx: &mut Context<Self>) -> Stateful<Div> {
+        row.drag_over::<Dragged>(|style, _, _, cx| style.bg(cx.theme().drop_target))
+            .on_drop(cx.listener(move |this, dragged: &Dragged, window, cx| {
+                this.move_into(dragged, &dir, window, cx)
+            }))
+    }
+
+    /// New request and new folder buttons, shown while the row is hovered.
+    fn hover_actions(
+        &self,
+        group: SharedString,
+        col: usize,
+        dir: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let folder_dir = dir.clone();
+        h_flex()
+            .flex_none()
+            .opacity(0.)
+            .group_hover(group.clone(), |style| style.opacity(1.))
+            .child(
+                Button::new(SharedString::from(format!("{group}:new-request")))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Plus)
+                    .tooltip("New request")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.new_request_in(col, &dir, window, cx)
+                    })),
+            )
+            .child(
+                Button::new(SharedString::from(format!("{group}:new-folder")))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::FolderPlus)
+                    .tooltip("New folder")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.new_folder_in(col, &folder_dir, window, cx)
+                    })),
+            )
     }
 
     fn render_collection(&self, col: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1353,91 +1506,97 @@ impl ReqoApp {
         let owned = collection.owned;
         let path_label = SharedString::from(dir.display().to_string());
 
-        self.tree_row(
-            SharedString::from(format!("collection:{}", dir.display())),
-            0,
-            &target,
-            cx,
-        )
-        .font_weight(FontWeight::SEMIBOLD)
-        .child(chevron(expanded, cx))
-        .child(self.row_label(&target, collection.name.clone()))
-        .when(!owned, |this| {
-            // Only the icon carries the path, so the tooltip stays clear of the context menu.
-            this.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "collection-path:{}",
-                        dir.display()
-                    )))
-                    .child(
-                        Icon::new(IconName::FolderSymlink)
-                            .xsmall()
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                    .tooltip(move |window, cx| Tooltip::new(path_label.clone()).build(window, cx)),
-            )
-        })
-        .on_click(cx.listener({
-            let dir = dir.clone();
-            move |this, event: &ClickEvent, window, cx| {
-                this.toggle_folded(&dir, cx);
-                if event.click_count() == 2 {
-                    this.start_rename(Target::Collection(col), window, cx);
-                }
-            }
-        }))
-        .context_menu(move |menu, _, _| {
-            let (d1, d2, d3, d4) = (dir.clone(), dir.clone(), dir.clone(), dir.clone());
-            menu.item(menu_item(
-                &this,
-                "New request",
-                Some(IconName::Plus),
-                move |this, window, cx| this.new_request_in(col, &d1, window, cx),
+        let id = SharedString::from(format!("collection:{}", dir.display()));
+        let row = self.tree_row(id.clone(), 0, &target, cx).group(id.clone());
+        self.drop_into(row, dir.clone(), cx)
+            .when(col > 0, |this| this.mt_1())
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(slot(chevron(expanded, cx)))
+            .child(slot(
+                Icon::new(IconName::LibraryBig)
+                    .small()
+                    .text_color(cx.theme().muted_foreground),
             ))
-            .item(menu_item(
-                &this,
-                "New folder",
-                Some(IconName::FolderPlus),
-                move |this, window, cx| this.new_folder_in(col, &d2, window, cx),
-            ))
-            .separator()
-            .item(menu_item(
-                &this,
-                "Rename",
-                Some(IconName::Pencil),
-                move |this, window, cx| this.start_rename(Target::Collection(col), window, cx),
-            ))
-            .item(menu_item(
-                &this,
-                "Edit environments",
-                Some(IconName::Settings2),
-                move |this, window, cx| this.edit_environments(&d3, window, cx),
-            ))
-            .item(menu_item(
-                &this,
-                "Show in file manager",
-                Some(IconName::FolderOpen),
-                move |_, _, cx| cx.reveal_path(&d4),
-            ))
-            .separator()
-            .item(if owned {
-                menu_item(
-                    &this,
-                    "Delete collection",
-                    Some(IconName::Trash),
-                    move |this, window, cx| this.confirm_remove_collection(col, window, cx),
-                )
-            } else {
-                menu_item(
-                    &this,
-                    "Remove from workspace",
-                    Some(IconName::Unlink),
-                    move |this, window, cx| this.confirm_remove_collection(col, window, cx),
+            .child(self.row_label(&target, collection.name.clone()))
+            .child(self.hover_actions(id, col, dir.clone(), cx))
+            .when(!owned, |this| {
+                // Only the icon carries the path, so the tooltip stays clear of the context menu.
+                this.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "collection-path:{}",
+                            dir.display()
+                        )))
+                        .child(
+                            Icon::new(IconName::FolderSymlink)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                        .tooltip(move |window, cx| {
+                            Tooltip::new(path_label.clone()).build(window, cx)
+                        }),
                 )
             })
-        })
-        .into_any_element()
+            .on_click(cx.listener({
+                let dir = dir.clone();
+                move |this, event: &ClickEvent, window, cx| {
+                    this.toggle_folded(&dir, cx);
+                    if event.click_count() == 2 {
+                        this.start_rename(Target::Collection(col), window, cx);
+                    }
+                }
+            }))
+            .context_menu(move |menu, _, _| {
+                let (d1, d2, d3, d4) = (dir.clone(), dir.clone(), dir.clone(), dir.clone());
+                menu.item(menu_item(
+                    &this,
+                    "New request",
+                    Some(IconName::Plus),
+                    move |this, window, cx| this.new_request_in(col, &d1, window, cx),
+                ))
+                .item(menu_item(
+                    &this,
+                    "New folder",
+                    Some(IconName::FolderPlus),
+                    move |this, window, cx| this.new_folder_in(col, &d2, window, cx),
+                ))
+                .separator()
+                .item(menu_item(
+                    &this,
+                    "Rename",
+                    Some(IconName::Pencil),
+                    move |this, window, cx| this.start_rename(Target::Collection(col), window, cx),
+                ))
+                .item(menu_item(
+                    &this,
+                    "Edit environments",
+                    Some(IconName::Settings2),
+                    move |this, window, cx| this.edit_environments(&d3, window, cx),
+                ))
+                .item(menu_item(
+                    &this,
+                    "Show in file manager",
+                    Some(IconName::FolderOpen),
+                    move |_, _, cx| cx.reveal_path(&d4),
+                ))
+                .separator()
+                .item(if owned {
+                    menu_item(
+                        &this,
+                        "Delete collection",
+                        Some(IconName::Trash),
+                        move |this, window, cx| this.confirm_remove_collection(col, window, cx),
+                    )
+                } else {
+                    menu_item(
+                        &this,
+                        "Remove from workspace",
+                        Some(IconName::Unlink),
+                        move |this, window, cx| this.confirm_remove_collection(col, window, cx),
+                    )
+                })
+            })
+            .into_any_element()
     }
 
     fn render_folder(
@@ -1452,61 +1611,69 @@ impl ReqoApp {
         let name: SharedString = file_name(&path).unwrap_or_default().into();
         let this = cx.entity().downgrade();
 
-        self.tree_row(
-            SharedString::from(format!("folder:{}", path.display())),
-            depth,
-            &target,
-            cx,
-        )
-        .child(chevron(expanded, cx))
-        .child(
-            Icon::new(if expanded {
-                IconName::FolderOpen
-            } else {
-                IconName::Folder
+        let id = SharedString::from(format!("folder:{}", path.display()));
+        let row = self
+            .tree_row(id.clone(), depth, &target, cx)
+            .group(id.clone());
+        let label = name.clone();
+        self.drop_into(row, path.clone(), cx)
+            .on_drag(Dragged::Folder(path.clone()), move |_, _, _, cx| {
+                cx.new(|_| DragPreview {
+                    label: label.clone(),
+                })
             })
-            .small()
-            .text_color(cx.theme().muted_foreground),
-        )
-        .child(self.row_label(&target, name))
-        .on_click(cx.listener({
-            let path = path.clone();
-            move |this, event: &ClickEvent, window, cx| {
-                this.toggle_folded(&path, cx);
-                if event.click_count() == 2 {
-                    this.start_rename(Target::Folder(path.clone()), window, cx);
+            .child(slot(chevron(expanded, cx)))
+            .child(slot(
+                Icon::new(if expanded {
+                    IconName::FolderOpen
+                } else {
+                    IconName::Folder
+                })
+                .small()
+                .text_color(cx.theme().muted_foreground),
+            ))
+            .child(self.row_label(&target, name))
+            .child(self.hover_actions(id, col, path.clone(), cx))
+            .on_click(cx.listener({
+                let path = path.clone();
+                move |this, event: &ClickEvent, window, cx| {
+                    this.toggle_folded(&path, cx);
+                    if event.click_count() == 2 {
+                        this.start_rename(Target::Folder(path.clone()), window, cx);
+                    }
                 }
-            }
-        }))
-        .context_menu(move |menu, _, _| {
-            let (p1, p2, p3, p4) = (path.clone(), path.clone(), path.clone(), path.clone());
-            menu.item(menu_item(
-                &this,
-                "New request",
-                Some(IconName::Plus),
-                move |this, window, cx| this.new_request_in(col, &p1, window, cx),
-            ))
-            .item(menu_item(
-                &this,
-                "New folder",
-                Some(IconName::FolderPlus),
-                move |this, window, cx| this.new_folder_in(col, &p2, window, cx),
-            ))
-            .separator()
-            .item(menu_item(
-                &this,
-                "Rename",
-                Some(IconName::Pencil),
-                move |this, window, cx| this.start_rename(Target::Folder(p3.clone()), window, cx),
-            ))
-            .item(menu_item(
-                &this,
-                "Delete",
-                Some(IconName::Trash),
-                move |this, window, cx| this.confirm_delete_folder(p4.clone(), window, cx),
-            ))
-        })
-        .into_any_element()
+            }))
+            .context_menu(move |menu, _, _| {
+                let (p1, p2, p3, p4) = (path.clone(), path.clone(), path.clone(), path.clone());
+                menu.item(menu_item(
+                    &this,
+                    "New request",
+                    Some(IconName::Plus),
+                    move |this, window, cx| this.new_request_in(col, &p1, window, cx),
+                ))
+                .item(menu_item(
+                    &this,
+                    "New folder",
+                    Some(IconName::FolderPlus),
+                    move |this, window, cx| this.new_folder_in(col, &p2, window, cx),
+                ))
+                .separator()
+                .item(menu_item(
+                    &this,
+                    "Rename",
+                    Some(IconName::Pencil),
+                    move |this, window, cx| {
+                        this.start_rename(Target::Folder(p3.clone()), window, cx)
+                    },
+                ))
+                .item(menu_item(
+                    &this,
+                    "Delete",
+                    Some(IconName::Trash),
+                    move |this, window, cx| this.confirm_delete_folder(p4.clone(), window, cx),
+                ))
+            })
+            .into_any_element()
     }
 
     fn render_request_row(&self, sel: Sel, depth: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -1522,56 +1689,57 @@ impl ReqoApp {
         let target = Target::Request(path.clone());
         let this = cx.entity().downgrade();
 
-        // Requests line up with folder names, past the chevron.
-        self.tree_row(
+        let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let label = SharedString::from(format!("{} {}", method_label(&request.method), name));
+        // The method takes the place of the chevron and icon of folders.
+        let row = self.tree_row(
             SharedString::from(format!("request:{}", path.display())),
             depth,
             &target,
             cx,
-        )
-        .pl(px(6. + depth as f32 * 14. + 20.))
-        .gap_2()
-        .when(selected, |this| this.bg(cx.theme().list_active))
-        .child(
-            div()
-                .w(px(48.))
-                .flex_none()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(method_color(&request.method, cx))
-                .child(SharedString::from(request.method.clone())),
-        )
-        .child(self.row_label(&target, name))
-        .when(selected && self.dirty, |this| {
-            this.child(div().text_color(cx.theme().muted_foreground).child("•"))
-        })
-        .on_click(cx.listener({
-            let path = path.clone();
-            move |this, event: &ClickEvent, window, cx| {
-                let Some(sel) = this.find(&path) else { return };
-                this.select(sel, window, cx);
-                this.focus_handle.focus(window, cx);
-                if event.click_count() == 2 {
-                    this.start_rename(Target::Request(path.clone()), window, cx);
+        );
+        self.drop_into(row, parent, cx)
+            .on_drag(Dragged::Request(path.clone()), move |_, _, _, cx| {
+                cx.new(|_| DragPreview {
+                    label: label.clone(),
+                })
+            })
+            .gap_1p5()
+            .when(selected, |this| this.bg(cx.theme().list_active))
+            .child(method_badge(&request.method, cx))
+            .child(self.row_label(&target, name))
+            .when(selected && self.dirty, |this| {
+                this.child(div().text_color(cx.theme().muted_foreground).child("•"))
+            })
+            .on_click(cx.listener({
+                let path = path.clone();
+                move |this, event: &ClickEvent, window, cx| {
+                    let Some(sel) = this.find(&path) else { return };
+                    this.select(sel, window, cx);
+                    this.focus_handle.focus(window, cx);
+                    if event.click_count() == 2 {
+                        this.start_rename(Target::Request(path.clone()), window, cx);
+                    }
                 }
-            }
-        }))
-        .context_menu(move |menu, _, _| {
-            let (p1, p2) = (path.clone(), path.clone());
-            menu.item(menu_item(
-                &this,
-                "Rename",
-                Some(IconName::Pencil),
-                move |this, window, cx| this.start_rename(Target::Request(p1.clone()), window, cx),
-            ))
-            .item(menu_item(
-                &this,
-                "Delete",
-                Some(IconName::Trash),
-                move |this, window, cx| this.confirm_delete_request(p2.clone(), window, cx),
-            ))
-        })
-        .into_any_element()
+            }))
+            .context_menu(move |menu, _, _| {
+                let (p1, p2) = (path.clone(), path.clone());
+                menu.item(menu_item(
+                    &this,
+                    "Rename",
+                    Some(IconName::Pencil),
+                    move |this, window, cx| {
+                        this.start_rename(Target::Request(p1.clone()), window, cx)
+                    },
+                ))
+                .item(menu_item(
+                    &this,
+                    "Delete",
+                    Some(IconName::Trash),
+                    move |this, window, cx| this.confirm_delete_request(p2.clone(), window, cx),
+                ))
+            })
+            .into_any_element()
     }
 
     fn render_url_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1850,6 +2018,24 @@ fn notify_error(err: anyhow::Error, window: &mut Window, cx: &mut App) {
     window.push_notification(Notification::error(format!("{err:#}")), cx);
 }
 
+/// A fixed-width cell for a chevron or icon, so labels line up across rows.
+fn slot(child: impl IntoElement) -> Div {
+    h_flex()
+        .w(px(TREE_INDENT))
+        .flex_none()
+        .justify_center()
+        .child(child)
+}
+
+/// Methods as short as they read, so the request names line up.
+fn method_label(method: &str) -> SharedString {
+    match method {
+        "DELETE" => "DEL".into(),
+        "OPTIONS" => "OPT".into(),
+        method => SharedString::from(method.to_string()),
+    }
+}
+
 fn chevron(expanded: bool, cx: &App) -> Icon {
     Icon::new(if expanded {
         IconName::ChevronDown
@@ -1877,6 +2063,24 @@ fn editor(state: &Entity<EditorState>, cx: &App) -> Editor {
         .h(relative(1.))
         .font_family(cx.theme().mono_font_family.clone())
         .text_size(cx.theme().mono_font_size)
+}
+
+/// The method as a fixed-width tinted badge: its left edge follows the tree
+/// indent and the names after it line up.
+fn method_badge(method: &str, cx: &App) -> Div {
+    let color = method_color(method, cx);
+    h_flex()
+        .w(px(2. * TREE_INDENT + 6.))
+        .h(px(16.))
+        .flex_none()
+        .justify_center()
+        .rounded(px(3.))
+        .bg(color.opacity(0.14))
+        .font_family(cx.theme().mono_font_family.clone())
+        .text_size(px(10.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(color)
+        .child(method_label(method))
 }
 
 fn method_color(method: &str, cx: &App) -> Hsla {

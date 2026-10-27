@@ -27,6 +27,7 @@ gpui_kit::assets::icon_assets!(
         Pencil,
         Trash,
         Layers,
+        LibraryBig,
         FolderPlus,
         FolderInput,
         FolderSymlink,

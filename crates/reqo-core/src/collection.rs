@@ -124,6 +124,64 @@ pub fn rename_folder(path: &Path, name: &str) -> Result<PathBuf> {
     Ok(new_path)
 }
 
+/// Moves the request's file into `dir`, keeping its file name unless that is
+/// taken there.
+pub fn move_entry(entry: &Entry, dir: &Path) -> Result<Entry> {
+    if entry.path.parent() == Some(dir) {
+        return Ok(entry.clone());
+    }
+    let file_name = entry.path.file_name().unwrap_or_default().to_string_lossy();
+    let stem = file_name.strip_suffix(REQUEST_EXT).unwrap_or(&file_name);
+    let path = free_path(dir, stem, REQUEST_EXT, None);
+    move_path(&entry.path, &path)?;
+    Ok(Entry {
+        path,
+        request: entry.request.clone(),
+    })
+}
+
+/// Moves the folder into `dir`, keeping its name unless that is taken there.
+/// A folder cannot go into itself or one of its subfolders.
+pub fn move_folder(path: &Path, dir: &Path) -> Result<PathBuf> {
+    if dir.starts_with(path) {
+        anyhow::bail!("a folder cannot be moved into itself");
+    }
+    if path.parent() == Some(dir) {
+        return Ok(path.to_path_buf());
+    }
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let new_path = free_path(dir, &name, "", None);
+    move_path(path, &new_path)?;
+    Ok(new_path)
+}
+
+/// Renames, or copies and deletes when `from` and `to` are on different filesystems.
+fn move_path(from: &Path, to: &Path) -> Result<()> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    copy_path(from, to)
+        .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
+    if from.is_dir() {
+        std::fs::remove_dir_all(from)
+    } else {
+        std::fs::remove_file(from)
+    }
+    .with_context(|| format!("removing {}", from.display()))
+}
+
+fn copy_path(from: &Path, to: &Path) -> std::io::Result<()> {
+    if !from.is_dir() {
+        return std::fs::copy(from, to).map(|_| ());
+    }
+    std::fs::create_dir(to)?;
+    for item in std::fs::read_dir(from)? {
+        let item = item?;
+        copy_path(&item.path(), &to.join(item.file_name()))?;
+    }
+    Ok(())
+}
+
 /// Deletes the folder with everything in it.
 pub fn delete_folder(path: &Path) -> Result<()> {
     std::fs::remove_dir_all(path).with_context(|| format!("removing {}", path.display()))
@@ -241,6 +299,30 @@ mod tests {
 
         delete_folder(&a).unwrap();
         assert_eq!(folders(&dir), vec![b]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn moves_requests_and_folders() {
+        let dir = std::env::temp_dir().join(format!("reqo-test-move-{}", std::process::id()));
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(b.join("nested")).unwrap();
+
+        let first = create(&a).unwrap();
+        let taken = create(&b).unwrap();
+        assert_eq!(taken.path, b.join("request-1.req.toml"));
+        // The name is taken in `b`, so the moved file gets the next free one.
+        let moved = move_entry(&first, &b).unwrap();
+        assert_eq!(moved.path, b.join("request-1-2.req.toml"));
+        assert!(!first.path.exists());
+        assert_eq!(move_entry(&moved, &b).unwrap().path, moved.path);
+
+        assert!(move_folder(&b, &b.join("nested")).is_err());
+        assert!(move_folder(&b, &b).is_err());
+        let b_moved = move_folder(&b, &a).unwrap();
+        assert_eq!(b_moved, a.join("b"));
+        assert_eq!(load(&dir).0.len(), 2);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
