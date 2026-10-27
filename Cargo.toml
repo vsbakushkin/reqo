@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/reqo-core"]
+members = ["crates/reqo-core", "crates/reqo"]
+default-members = ["crates/reqo"]
 resolver = "2"
 
 [workspace.package]
