@@ -51,7 +51,6 @@ const TREE_INDENT: f32 = 16.;
 const TREE_PAD: f32 = 4.;
 
 type MethodSelect = SelectState<Vec<&'static str>>;
-type EnvSelect = SelectState<Vec<SharedString>>;
 
 /// A collection of the open workspace, as loaded from disk.
 struct Collection {
@@ -156,7 +155,10 @@ pub struct ReqoApp {
     load_errors: Vec<SharedString>,
     renaming: Option<Renaming>,
 
-    env_select: Entity<EnvSelect>,
+    /// The environment whose variables fill `{{name}}` placeholders.
+    env: Option<String>,
+    /// Set when "No environment" was picked, so reloads do not pick one again.
+    env_off: bool,
 
     method: Entity<MethodSelect>,
     url: Entity<InputState>,
@@ -209,7 +211,6 @@ impl ReqoApp {
                 .searchable(true)
         });
         let response_headers = cx.new(|cx| TextareaState::new(window, cx));
-        let env_select = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
 
         let mut subscriptions = vec![cx.subscribe(
             &method,
@@ -234,7 +235,8 @@ impl ReqoApp {
             dirty: false,
             load_errors: Vec::new(),
             renaming: None,
-            env_select,
+            env: None,
+            env_off: false,
             method,
             url,
             headers,
@@ -346,7 +348,7 @@ impl ReqoApp {
         self.dirty = false;
         match sel {
             Some(sel) => self.select(sel, window, cx),
-            None => self.refresh_envs(window, cx),
+            None => self.refresh_envs(),
         }
         cx.notify();
     }
@@ -381,7 +383,7 @@ impl ReqoApp {
         });
         self.dirty = false;
         if collection_changed {
-            self.refresh_envs(window, cx);
+            self.refresh_envs();
         }
         cx.notify();
     }
@@ -396,25 +398,22 @@ impl ReqoApp {
 
     /// Lists the environments available to the selected request, keeping the
     /// chosen one when it is still there.
-    fn refresh_envs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let names: Vec<SharedString> = self.envs().names().map(|n| n.to_string().into()).collect();
-        let current = self
-            .env_select
-            .read(cx)
-            .selected_value()
-            .cloned()
-            .filter(|env| names.contains(env));
-        self.env_select.update(cx, |state, cx| {
-            let has_envs = !names.is_empty();
-            state.set_items(names, window, cx);
-            match current {
-                Some(env) => state.set_selected_value(&env, window, cx),
-                None if has_envs => {
-                    state.set_selected_index(Some(IndexPath::default()), window, cx)
-                }
-                None => state.set_selected_index(None, window, cx),
-            }
-        });
+    fn refresh_envs(&mut self) {
+        let envs = self.envs();
+        if let Some(env) = &self.env
+            && envs.variables(env).is_none()
+        {
+            self.env = None;
+        }
+        if self.env.is_none() && !self.env_off {
+            self.env = envs.names().next().map(str::to_string);
+        }
+    }
+
+    fn set_env(&mut self, env: Option<String>, cx: &mut Context<Self>) {
+        self.env_off = env.is_none();
+        self.env = env;
+        cx.notify();
     }
 
     /// The request as currently shown in the editors.
@@ -1085,14 +1084,13 @@ impl ReqoApp {
         } else if let Some(collection) = self.collections.iter_mut().find(|c| c.dir == dir) {
             collection.envs = envs;
         }
-        self.refresh_envs(window, cx);
+        self.refresh_envs();
         cx.notify();
     }
 
-    fn variables(&self, cx: &App) -> Variables {
-        self.env_select
-            .read(cx)
-            .selected_value()
+    fn variables(&self) -> Variables {
+        self.env
+            .as_ref()
             .and_then(|name| self.envs().variables(name).cloned())
             .unwrap_or_default()
     }
@@ -1101,7 +1099,7 @@ impl ReqoApp {
         let Some(sel) = self.selected else { return };
         self.save(&SaveRequest, window, cx);
         let request = self.edited_request(sel, cx);
-        let vars = self.variables(cx);
+        let vars = self.variables();
 
         self.in_flight = Some(cx.spawn_in(window, async move |this, cx| {
             let result = cx
@@ -1199,13 +1197,15 @@ impl ReqoApp {
             .border_r_1()
             .border_color(theme.sidebar_border)
             .child(
+                v_flex()
+                    .border_b_1()
+                    .border_color(theme.sidebar_border)
+                    .child(
                 h_flex()
                     .h(px(40.))
                     .px_1()
                     .gap_1()
                     .justify_between()
-                    .border_b_1()
-                    .border_color(theme.sidebar_border)
                     .child(div().min_w_0().child(self.render_workspace_menu(cx)))
                     .child(
                         h_flex()
@@ -1229,6 +1229,14 @@ impl ReqoApp {
                                         this.open_settings(&OpenSettings, window, cx)
                                     })),
                             ),
+                    ),
+                    )
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .px_1()
+                            .pb_1p5()
+                            .child(self.render_env_picker(cx)),
                     ),
             )
             .child(
@@ -1756,27 +1764,6 @@ impl ReqoApp {
                     .child(Select::new(&self.method)),
             )
             .child(div().flex_1().child(Input::new(&self.url)))
-            .when(
-                !self.env_select.read(cx).selected_value().is_none(),
-                |this| {
-                    this.child(
-                        div()
-                            .w(px(130.))
-                            .flex_none()
-                            .child(Select::new(&self.env_select).placeholder("No env")),
-                    )
-                },
-            )
-            .child(
-                Button::new("environments")
-                    .ghost()
-                    .icon(IconName::Settings2)
-                    .tooltip("Environments")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let dir = this.workspace.dir.clone();
-                        this.edit_environments(&dir, window, cx)
-                    })),
-            )
             .child(
                 Button::new("send")
                     .primary()
@@ -1790,6 +1777,65 @@ impl ReqoApp {
                         cx.listener(|this, _, window, cx| this.send(&SendRequest, window, cx)),
                     ),
             )
+    }
+
+    /// The environment button under the workspace menu: shows which
+    /// environment of the workspace fills `{{variables}}` and switches it, or
+    /// opens the editor.
+    fn render_env_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
+        let names: Vec<String> = self.envs().names().map(str::to_string).collect();
+        let current = self.env.clone();
+        let workspace_dir = self.workspace.dir.clone();
+        let (icon, label, tooltip) = match &current {
+            Some(env) => (
+                IconName::Globe,
+                env.clone(),
+                "Environment: the values for {{variables}}",
+            ),
+            None => (
+                IconName::GlobeOff,
+                "No environment".to_string(),
+                "No environment: {{variables}} stay as they are",
+            ),
+        };
+
+        // Styled like the workspace switcher above it: both pick what the
+        // sidebar and the requests work in.
+        Button::new("environment")
+            .ghost()
+            .small()
+            .icon(icon)
+            .label(label)
+            .dropdown_caret(true)
+            .tooltip(tooltip)
+            .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu: PopupMenu, _, _| {
+                let mut menu = menu.min_w(px(220.)).label("Environment");
+                for name in &names {
+                    let env = name.clone();
+                    menu = menu.item(
+                        menu_item(&this, name.clone(), None, move |this, _, cx| {
+                            this.set_env(Some(env.clone()), cx)
+                        })
+                        .checked(current.as_deref() == Some(name)),
+                    );
+                }
+                let dir = workspace_dir.clone();
+                menu.separator()
+                    .item(
+                        menu_item(&this, "No environment", None, |this, _, cx| {
+                            this.set_env(None, cx)
+                        })
+                        .checked(current.is_none()),
+                    )
+                    .separator()
+                    .item(menu_item(
+                        &this,
+                        "Manage environments…",
+                        Some(IconName::Settings2),
+                        move |this, window, cx| this.edit_environments(&dir, window, cx),
+                    ))
+            })
     }
 
     fn render_request(&self, cx: &mut Context<Self>) -> impl IntoElement {
