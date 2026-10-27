@@ -1,6 +1,7 @@
 //! UI-independent part of reqo: the request file format, environments and
 //! request execution.
 
+pub mod collection;
 mod env;
 mod exec;
 mod request;
