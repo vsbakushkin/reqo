@@ -5,14 +5,16 @@
 //! `$XDG_CONFIG_HOME/reqo/settings.toml`.
 
 use std::path::PathBuf;
+use std::process::Command;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use gpui_kit::component::{ActiveTheme, Theme, ThemeConfig, ThemeMode, ThemeRegistry};
 use gpui_kit::*;
 use serde::{Deserialize, Serialize};
 
 /// Dark theme used until the user picks one. Light mode keeps gpui-kit's default.
-const DEFAULT_DARK: &str = "Tokyo Night";
+const DEFAULT_DARK: &str = "Graphite";
 
 const BUNDLED: &[&str] = &[
     include_str!("../themes/tokyonight.json"),
@@ -20,6 +22,8 @@ const BUNDLED: &[&str] = &[
     include_str!("../themes/ayu.json"),
     include_str!("../themes/gruvbox.json"),
     include_str!("../themes/everforest.json"),
+    include_str!("../themes/one-half-dark.json"),
+    include_str!("../themes/graphite.json"),
 ];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -89,9 +93,11 @@ impl ThemeSettings {
 
     /// Applies the settings: the chosen theme for each mode, then the mode.
     pub fn apply(&self, window: &mut Window, cx: &mut App) {
+        // A saved theme that no longer exists, e.g. after a rename, falls back to the default.
         let dark = self
             .theme_name(ThemeMode::Dark)
-            .and_then(|name| find_theme(name, cx));
+            .and_then(|name| find_theme(name, cx))
+            .or_else(|| find_theme(DEFAULT_DARK, cx));
         let light = self
             .theme_name(ThemeMode::Light)
             .and_then(|name| find_theme(name, cx));
@@ -107,6 +113,12 @@ impl ThemeSettings {
             .map(ThemeMode::from)
             .unwrap_or_else(|| window.appearance().into());
         Theme::change(mode, Some(window), cx);
+        if let Some(font) = desktop_font(cx) {
+            let theme = Theme::global_mut(cx);
+            theme.font_family = font.clone();
+            theme.mono_font_family = font;
+            window.refresh();
+        }
     }
 
     /// Switches to the opposite mode and remembers it.
@@ -155,6 +167,24 @@ impl ThemeSettings {
 
 /// Mode options in settings; the first one follows the system.
 pub const MODE_CHOICES: [&str; 3] = ["System", "Light", "Dark"];
+
+/// The desktop's monospace font as fontconfig resolves it, e.g. the one picked
+/// with `omarchy font set`. It is used for the whole UI, like the desktop does.
+/// `None` when fontconfig is missing or names a font GPUI cannot load, since
+/// laying out text in a missing family panics.
+fn desktop_font(cx: &App) -> Option<SharedString> {
+    static FONT: OnceLock<Option<SharedString>> = OnceLock::new();
+    FONT.get_or_init(|| {
+        let output = Command::new("fc-match")
+            .args(["--format=%{family[0]}", "monospace"])
+            .output()
+            .ok()?;
+        let family = String::from_utf8(output.stdout).ok()?.trim().to_string();
+        let installed = cx.text_system().all_font_names();
+        installed.contains(&family).then(|| family.into())
+    })
+    .clone()
+}
 
 /// Registers the bundled themes. Call once at startup.
 pub fn init(cx: &mut App) {
