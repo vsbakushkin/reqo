@@ -33,22 +33,49 @@ pub fn load(dir: &Path) -> (Vec<Entry>, Vec<anyhow::Error>) {
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(read_dir) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for item in read_dir.flatten() {
-        let path = item.path();
-        let name = item.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') || name == "target" || name == "node_modules" {
-            continue;
-        }
-        if path.is_dir() {
+    for (path, is_dir) in children(dir) {
+        if is_dir {
             collect(&path, out);
-        } else if name.ends_with(REQUEST_EXT) {
+        } else if path.to_string_lossy().ends_with(REQUEST_EXT) {
             out.push(path);
         }
     }
+}
+
+/// Every folder under `dir`, sorted by path, including ones without requests.
+pub fn folders(dir: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for (path, is_dir) in children(dir) {
+            if is_dir {
+                out.push(path.clone());
+                walk(&path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out);
+    out.sort();
+    out
+}
+
+/// Entries of `dir` with whether each is a directory, skipping hidden and build folders.
+fn children(dir: &Path) -> Vec<(PathBuf, bool)> {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    read_dir
+        .flatten()
+        .filter(|item| {
+            let name = item.file_name();
+            let name = name.to_string_lossy();
+            !(name.starts_with('.') || name == "target" || name == "node_modules")
+        })
+        .map(|item| {
+            let path = item.path();
+            let is_dir = path.is_dir();
+            (path, is_dir)
+        })
+        .collect()
 }
 
 /// Creates a new request file in `dir` with a free `request-N.req.toml` name.
@@ -69,14 +96,7 @@ pub fn rename(entry: &Entry, name: &str) -> Result<Entry> {
     request.name = name.trim().to_string();
 
     let dir = entry.path.parent().unwrap_or(Path::new("."));
-    let stem = slug(&request.name);
-    let path = (1..)
-        .map(|n| match n {
-            1 => dir.join(format!("{stem}{REQUEST_EXT}")),
-            n => dir.join(format!("{stem}-{n}{REQUEST_EXT}")),
-        })
-        .find(|path| *path == entry.path || !path.exists())
-        .expect("unbounded range");
+    let path = free_path(dir, &slug(&request.name), REQUEST_EXT, Some(&entry.path));
 
     request.save(&path)?;
     if path != entry.path {
@@ -86,13 +106,69 @@ pub fn rename(entry: &Entry, name: &str) -> Result<Entry> {
     Ok(Entry { path, request })
 }
 
+/// Creates a `New Folder` (or `New Folder-N`) folder in `parent`.
+pub fn create_folder(parent: &Path) -> Result<PathBuf> {
+    let path = free_path(parent, "New Folder", "", None);
+    std::fs::create_dir(&path).with_context(|| format!("creating {}", path.display()))?;
+    Ok(path)
+}
+
+/// Renames the folder, keeping it in the same parent. Folder names are shown
+/// in the app as they are, so only characters a file name cannot hold change.
+pub fn rename_folder(path: &Path, name: &str) -> Result<PathBuf> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let new_path = free_path(parent, &folder_name(name), "", Some(path));
+    if new_path != path {
+        std::fs::rename(path, &new_path).with_context(|| format!("renaming {}", path.display()))?;
+    }
+    Ok(new_path)
+}
+
+/// Deletes the folder with everything in it.
+pub fn delete_folder(path: &Path) -> Result<()> {
+    std::fs::remove_dir_all(path).with_context(|| format!("removing {}", path.display()))
+}
+
+/// `dir/stem+ext`, or `dir/stem-N+ext` when taken. `current` counts as free,
+/// so renaming something to its own name keeps it in place.
+pub(crate) fn free_path(dir: &Path, stem: &str, ext: &str, current: Option<&Path>) -> PathBuf {
+    (1..)
+        .map(|n| match n {
+            1 => dir.join(format!("{stem}{ext}")),
+            n => dir.join(format!("{stem}-{n}{ext}")),
+        })
+        .find(|path| Some(path.as_path()) == current || !path.exists())
+        .expect("unbounded range")
+}
+
 /// Deletes the request's file.
 pub fn delete(entry: &Entry) -> Result<()> {
     std::fs::remove_file(&entry.path).with_context(|| format!("removing {}", entry.path.display()))
 }
 
+/// `name` usable as a folder name: no path separators, not hidden.
+fn folder_name(name: &str) -> String {
+    let name: String = name
+        .trim()
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '/' | '\\' | '\0') {
+                '-'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let name = name.trim_start_matches('.');
+    if name.is_empty() {
+        "Folder".into()
+    } else {
+        name.into()
+    }
+}
+
 /// File-name friendly form of `name`: lowercase letters and digits joined by `-`.
-fn slug(name: &str) -> String {
+pub(crate) fn slug(name: &str) -> String {
     let mut slug = String::new();
     for ch in name.chars() {
         if ch.is_alphanumeric() {
@@ -145,6 +221,27 @@ mod tests {
         delete(&b).unwrap();
         assert!(collection_is_empty(&dir));
         std::fs::remove_dir(&dir).unwrap();
+    }
+
+    #[test]
+    fn folders_are_listed_renamed_and_deleted() {
+        let dir = std::env::temp_dir().join(format!("reqo-test-folders-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+
+        let a = create_folder(&dir).unwrap();
+        let b = create_folder(&dir).unwrap();
+        assert_eq!(b, dir.join("New Folder-2"));
+        let a = rename_folder(&a, "Users API").unwrap();
+        assert_eq!(a, dir.join("Users API"));
+        assert_eq!(folder_name(" ../a/b "), "-a-b");
+        let nested = create_folder(&a).unwrap();
+        create(&nested).unwrap();
+        assert_eq!(folders(&dir), vec![b.clone(), a.clone(), nested]);
+        assert_eq!(load(&dir).0.len(), 1);
+
+        delete_folder(&a).unwrap();
+        assert_eq!(folders(&dir), vec![b]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn collection_is_empty(dir: &Path) -> bool {

@@ -2,14 +2,16 @@ mod app;
 mod theme;
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::component::Root;
 use gpui_kit::*;
 
+use reqo_core::workspace;
+
 use crate::app::{
-    DeleteRequest, KEY_CONTEXT, NewRequest, Reload, RenameRequest, ReqoApp, SaveRequest,
-    SendRequest, ToggleTheme,
+    DEFAULT_WORKSPACE, DeleteRequest, KEY_CONTEXT, NewRequest, Reload, RenameRequest, ReqoApp,
+    SaveRequest, SendRequest, ToggleTheme,
 };
 
 actions!(reqo, [Quit]);
@@ -17,7 +19,20 @@ actions!(reqo, [Quit]);
 // Icons outside the default component set that the app uses.
 gpui_kit::assets::icon_assets!(
     ExtraIcons,
-    [Send, RefreshCw, Sun, Moon, Palette, Pencil, Trash]
+    [
+        Send,
+        RefreshCw,
+        Sun,
+        Moon,
+        Palette,
+        Pencil,
+        Trash,
+        Layers,
+        FolderPlus,
+        FolderInput,
+        FolderSymlink,
+        Unlink
+    ]
 );
 
 /// The default component icons plus [`ExtraIcons`].
@@ -40,13 +55,36 @@ impl AssetSource for AppAssets {
     }
 }
 
-fn main() {
-    // The collection is the directory given on the command line, or the current one.
-    let dir = std::env::args_os()
-        .nth(1)
+/// Where workspaces live: `$XDG_DATA_HOME/reqo`, or `~/.local/share/reqo`.
+fn data_root() -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().expect("current directory"));
-    let dir = dir.canonicalize().unwrap_or(dir);
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+        })
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("reqo")
+}
+
+fn main() {
+    let root = data_root();
+    let mut workspace = workspace::open_last(&root, DEFAULT_WORKSPACE).unwrap_or_else(|err| {
+        eprintln!("reqo: {err:#}");
+        std::process::exit(1);
+    });
+    // A folder given on the command line joins the workspace as a collection.
+    let reveal = std::env::args_os().nth(1).and_then(|dir| {
+        match workspace.add_collection(Path::new(&dir)) {
+            Ok(ix) => Some(workspace.collection_dir(&workspace.collections[ix])),
+            Err(err) => {
+                eprintln!("reqo: {err:#}");
+                None
+            }
+        }
+    });
+    if let Err(err) = workspace::remember(&root, &workspace) {
+        eprintln!("reqo: {err:#}");
+    }
 
     gpui_kit::application()
         .with_assets(AppAssets)
@@ -73,7 +111,9 @@ fn main() {
                 ..Default::default()
             };
             cx.open_window(options, |window, cx| {
-                let view = cx.new(|cx| ReqoApp::new(dir, window, cx));
+                let view = cx.new(|cx| {
+                    ReqoApp::new(root.clone(), workspace.clone(), reveal.clone(), window, cx)
+                });
                 // Root hosts dialogs, notifications and popovers above the view.
                 cx.new(|cx| Root::new(view, window, cx))
             })

@@ -42,6 +42,18 @@ impl Environments {
     pub fn variables(&self, name: &str) -> Option<&Variables> {
         self.envs.get(name)
     }
+
+    /// `self` with `overrides` on top: environments are matched by name, and
+    /// variables in `overrides` replace those of the same name.
+    pub fn merged(&self, overrides: &Environments) -> Environments {
+        let mut envs = self.envs.clone();
+        for (name, vars) in &overrides.envs {
+            envs.entry(name.clone())
+                .or_default()
+                .extend(vars.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        Environments { envs }
+    }
 }
 
 /// Replaces `{{name}}` with its value. Unknown variables are left as they are.
@@ -85,5 +97,21 @@ mod tests {
             substitute("{{missing}}/{{base", &vars),
             "{{missing}}/{{base"
         );
+    }
+
+    #[test]
+    fn merged_overrides_by_name() {
+        let base: Environments = Environments {
+            envs: toml::from_str("[dev]\nbase = \"a\"\ntoken = \"t\"\n[prod]\nbase = \"p\"")
+                .unwrap(),
+        };
+        let overrides = Environments {
+            envs: toml::from_str("[dev]\nbase = \"b\"\n[local]\nbase = \"l\"").unwrap(),
+        };
+        let merged = base.merged(&overrides);
+        assert_eq!(merged.names().collect::<Vec<_>>(), ["dev", "prod", "local"]);
+        let dev = merged.variables("dev").unwrap();
+        assert_eq!(dev["base"], "b");
+        assert_eq!(dev["token"], "t");
     }
 }
