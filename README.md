@@ -66,6 +66,8 @@ open from the menus via *Edit environments*.
 | Ctrl+S       | Save                    |
 | Ctrl+N       | New request             |
 | Ctrl+R       | Reload files from disk  |
+| Ctrl+,       | Settings                |
+| Ctrl+Shift+T | Toggle light/dark mode  |
 | F2           | Rename request          |
 | Delete       | Delete request          |
 

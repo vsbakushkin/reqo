@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::theme::{self, ThemeSettings};
+use crate::settings::Settings;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme, Icon, IndexPath, Root, Sizable as _, WindowExt as _,
@@ -33,7 +33,8 @@ actions!(
         Reload,
         ToggleTheme,
         RenameRequest,
-        DeleteRequest
+        DeleteRequest,
+        OpenSettings
     ]
 );
 
@@ -144,8 +145,7 @@ pub struct ReqoApp {
     outcome: Option<Outcome>,
     in_flight: Option<Task<()>>,
 
-    theme_settings: ThemeSettings,
-    theme_select: Entity<SelectState<Vec<SharedString>>>,
+    settings: Entity<Settings>,
 
     _subscriptions: Vec<Subscription>,
 }
@@ -159,6 +159,8 @@ impl ReqoApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // First, so everything below is created with the saved theme.
+        let settings = cx.new(|cx| Settings::new(window, cx));
         let method =
             cx.new(|cx| SelectState::new(METHODS.to_vec(), Some(IndexPath::default()), window, cx));
         let url =
@@ -189,27 +191,6 @@ impl ReqoApp {
         subscriptions.push(cx.subscribe(&headers, Self::on_input_event));
         subscriptions.push(cx.subscribe(&body, Self::on_input_event));
 
-        let theme_settings = ThemeSettings::load();
-        theme_settings.apply(window, cx);
-        subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
-            if this.theme_settings.follows_system() {
-                this.theme_settings.apply(window, cx);
-                this.sync_theme_select(window, cx);
-            }
-        }));
-        let theme_select = cx.new(|cx| SelectState::new(Vec::new(), None, window, cx));
-        subscriptions.push(cx.subscribe_in(
-            &theme_select,
-            window,
-            |this, _, event: &SelectEvent<Vec<SharedString>>, window, cx| {
-                let SelectEvent::Confirm(Some(name)) = event else {
-                    return;
-                };
-                this.theme_settings.set_theme(name, window, cx);
-                cx.notify();
-            },
-        ));
-
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
 
@@ -236,11 +217,9 @@ impl ReqoApp {
             response_tab: 0,
             outcome: None,
             in_flight: None,
-            theme_settings,
-            theme_select,
+            settings,
             _subscriptions: subscriptions,
         };
-        this.sync_theme_select(window, cx);
         this.load(None, window, cx);
         if let Some(col) = reveal.and_then(|dir| this.collections.iter().position(|c| c.dir == dir))
         {
@@ -1065,18 +1044,15 @@ impl ReqoApp {
     }
 
     fn toggle_theme(&mut self, _: &ToggleTheme, window: &mut Window, cx: &mut Context<Self>) {
-        self.theme_settings.toggle_mode(window, cx);
-        self.sync_theme_select(window, cx);
+        self.settings
+            .update(cx, |settings, cx| settings.toggle_mode(window, cx));
         cx.notify();
     }
 
-    /// Lists the themes of the current mode in the picker, with the active one selected.
-    fn sync_theme_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let names = theme::names_for_current_mode(cx);
-        let current = theme::current_name(cx);
-        self.theme_select.update(cx, |state, cx| {
-            state.set_items(names, window, cx);
-            state.set_selected_value(&current, window, cx);
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        let settings = self.settings.clone();
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog.title("Settings").w(px(520.)).child(settings.clone())
         });
     }
 
@@ -1140,20 +1116,6 @@ impl ReqoApp {
                     .child(
                         h_flex()
                             .child(
-                                Button::new("toggle-theme")
-                                    .ghost()
-                                    .small()
-                                    .icon(if cx.theme().is_dark() {
-                                        IconName::Sun
-                                    } else {
-                                        IconName::Moon
-                                    })
-                                    .tooltip("Toggle dark mode (Ctrl+Shift+T)")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.toggle_theme(&ToggleTheme, window, cx)
-                                    })),
-                            )
-                            .child(
                                 Button::new("reload")
                                     .ghost()
                                     .small()
@@ -1161,6 +1123,16 @@ impl ReqoApp {
                                     .tooltip("Reload from disk (Ctrl+R)")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.reload(&Reload, window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("settings")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Settings)
+                                    .tooltip("Settings (Ctrl+,)")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_settings(&OpenSettings, window, cx)
                                     })),
                             ),
                     ),
@@ -1243,18 +1215,6 @@ impl ReqoApp {
                     .text_color(cx.theme().danger)
                     .child(error.clone())
             }))
-            .child(
-                div()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(cx.theme().sidebar_border)
-                    .child(
-                        Select::new(&self.theme_select)
-                            .small()
-                            .icon(IconName::Palette)
-                            .accessibility_label("Color theme"),
-                    ),
-            )
     }
 
     /// Workspace name that opens the switcher and workspace actions.
@@ -1819,6 +1779,7 @@ impl Render for ReqoApp {
             .on_action(cx.listener(Self::new_request))
             .on_action(cx.listener(Self::reload))
             .on_action(cx.listener(Self::toggle_theme))
+            .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::rename_selected))
             .on_action(cx.listener(Self::delete_selected))
             .child(

@@ -120,10 +120,30 @@ impl ThemeSettings {
         self.apply(window, cx);
     }
 
-    /// Uses `name` for the current mode and remembers it.
-    pub fn set_theme(&mut self, name: &str, window: &mut Window, cx: &mut App) {
+    /// The mode as offered in settings: one of [`MODE_CHOICES`].
+    pub fn mode_choice(&self) -> &'static str {
+        match self.mode {
+            None => MODE_CHOICES[0],
+            Some(Mode::Light) => MODE_CHOICES[1],
+            Some(Mode::Dark) => MODE_CHOICES[2],
+        }
+    }
+
+    /// Sets the mode from one of [`MODE_CHOICES`] and remembers it.
+    pub fn set_mode_choice(&mut self, choice: &str, window: &mut Window, cx: &mut App) {
+        self.mode = match choice {
+            "Light" => Some(Mode::Light),
+            "Dark" => Some(Mode::Dark),
+            _ => None,
+        };
+        self.save();
+        self.apply(window, cx);
+    }
+
+    /// Uses `name` for dark or light mode and remembers it.
+    pub fn set_theme(&mut self, dark: bool, name: &str, window: &mut Window, cx: &mut App) {
         let name = Some(name.to_string());
-        if cx.theme().is_dark() {
+        if dark {
             self.dark_theme = name;
         } else {
             self.light_theme = name;
@@ -132,6 +152,9 @@ impl ThemeSettings {
         self.apply(window, cx);
     }
 }
+
+/// Mode options in settings; the first one follows the system.
+pub const MODE_CHOICES: [&str; 3] = ["System", "Light", "Dark"];
 
 /// Registers the bundled themes. Call once at startup.
 pub fn init(cx: &mut App) {
@@ -147,20 +170,24 @@ fn find_theme(name: &str, cx: &App) -> Option<Rc<ThemeConfig>> {
     ThemeRegistry::global(cx).themes().get(name).cloned()
 }
 
-/// Names of the themes available for the current mode, sorted.
-pub fn names_for_current_mode(cx: &App) -> Vec<SharedString> {
-    let is_dark = cx.theme().is_dark();
+/// Names of the dark or light themes, sorted.
+pub fn names(dark: bool, cx: &App) -> Vec<SharedString> {
     let mut names: Vec<SharedString> = ThemeRegistry::global(cx)
         .themes()
         .values()
-        .filter(|theme| theme.mode.is_dark() == is_dark)
+        .filter(|theme| theme.mode.is_dark() == dark)
         .map(|theme| theme.name.clone())
         .collect();
     names.sort();
     names
 }
 
-/// Name of the active theme.
-pub fn current_name(cx: &App) -> SharedString {
-    cx.theme().theme_name().clone()
+/// Name of the theme used in dark or light mode.
+pub fn name(dark: bool, cx: &App) -> SharedString {
+    let theme = Theme::global(cx);
+    if dark {
+        theme.dark_theme.name.clone()
+    } else {
+        theme.light_theme.name.clone()
+    }
 }

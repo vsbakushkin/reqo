@@ -1,4 +1,5 @@
 mod app;
+mod settings;
 mod theme;
 
 use std::borrow::Cow;
@@ -10,8 +11,8 @@ use gpui_kit::*;
 use reqo_core::workspace;
 
 use crate::app::{
-    DEFAULT_WORKSPACE, DeleteRequest, KEY_CONTEXT, NewRequest, Reload, RenameRequest, ReqoApp,
-    SaveRequest, SendRequest, ToggleTheme,
+    DEFAULT_WORKSPACE, DeleteRequest, KEY_CONTEXT, NewRequest, OpenSettings, Reload, RenameRequest,
+    ReqoApp, SaveRequest, SendRequest, ToggleTheme,
 };
 
 actions!(reqo, [Quit]);
@@ -22,9 +23,6 @@ gpui_kit::assets::icon_assets!(
     [
         Send,
         RefreshCw,
-        Sun,
-        Moon,
-        Palette,
         Pencil,
         Trash,
         Layers,
@@ -98,6 +96,7 @@ fn main() {
                 KeyBinding::new("ctrl-n", NewRequest, None),
                 KeyBinding::new("ctrl-r", Reload, None),
                 KeyBinding::new("ctrl-shift-t", ToggleTheme, None),
+                KeyBinding::new("ctrl-,", OpenSettings, None),
                 KeyBinding::new("f2", RenameRequest, None),
                 // Only outside inputs, where Delete edits text.
                 KeyBinding::new("delete", DeleteRequest, Some(KEY_CONTEXT)),
