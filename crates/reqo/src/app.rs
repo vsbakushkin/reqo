@@ -57,6 +57,11 @@ const MAIN_MIN_WIDTH: f32 = 420.;
 const REQUEST_MIN_HEIGHT: f32 = 120.;
 const RESPONSE_MIN_HEIGHT: f32 = 120.;
 
+/// Heights of the URL bar and of the request tabs below it, in pixels. The
+/// sidebar header spans both, so its bottom line runs on into the tabs' underline.
+const URL_BAR_HEIGHT: f32 = 48.;
+const TAB_ROW_HEIGHT: f32 = 30.;
+
 /// The smallest window that still fits every panel at its minimum size.
 pub const WINDOW_MIN_SIZE: (f32, f32) = (SIDEBAR_WIDTH.start + MAIN_MIN_WIDTH, 360.);
 
@@ -1208,11 +1213,14 @@ impl ReqoApp {
             .border_color(theme.sidebar_border)
             .child(
                 v_flex()
+                    .h(px(URL_BAR_HEIGHT + TAB_ROW_HEIGHT))
+                    .flex_none()
                     .border_b_1()
                     .border_color(theme.sidebar_border)
                     .child(
                 h_flex()
-                    .h(px(40.))
+                    .h(px(URL_BAR_HEIGHT))
+                    .flex_none()
                     .px_1()
                     .gap_1()
                     .justify_between()
@@ -1245,9 +1253,9 @@ impl ReqoApp {
                     )
                     .child(
                         h_flex()
+                            .flex_1()
                             .min_w_0()
                             .px_1()
-                            .pb_1p5()
                             .child(self.render_env_picker(cx)),
                     ),
             )
@@ -1773,8 +1781,10 @@ impl ReqoApp {
     fn render_url_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let sending = self.in_flight.is_some();
         h_flex()
+            .h(px(URL_BAR_HEIGHT))
+            .flex_none()
             .gap_2()
-            .p_2()
+            .px_2()
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
@@ -1873,18 +1883,26 @@ impl ReqoApp {
         v_flex()
             .size_full()
             .child(
-                h_flex().gap_2().px_2().justify_between().child(
-                    TabBar::new("request-tabs")
-                        .underline()
-                        .small()
-                        .selected_index(self.request_tab)
-                        .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                            this.request_tab = *ix;
-                            cx.notify();
-                        }))
-                        .child(Tab::new().label("Body").cursor_pointer())
-                        .child(Tab::new().label("Headers").cursor_pointer()),
-                ),
+                h_flex()
+                    .h(px(TAB_ROW_HEIGHT))
+                    .flex_none()
+                    // The underline sits on the bottom edge, whatever the tabs' own height.
+                    .items_end()
+                    .gap_2()
+                    .px_2()
+                    .justify_between()
+                    .child(
+                        TabBar::new("request-tabs")
+                            .underline()
+                            .small()
+                            .selected_index(self.request_tab)
+                            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                                this.request_tab = *ix;
+                                cx.notify();
+                            }))
+                            .child(Tab::new().label("Body").cursor_pointer())
+                            .child(Tab::new().label("Headers").cursor_pointer()),
+                    ),
             )
             .child(div().flex_1().min_h_0().child(content))
     }
