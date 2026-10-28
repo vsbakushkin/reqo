@@ -1630,14 +1630,21 @@ impl ReqoApp {
         let row = self.tree_row(id.clone(), 0, &target, cx).group(id.clone());
         self.drop_into(row, dir.clone(), cx)
             .when(col > 0, |this| this.mt_1())
-            .font_weight(FontWeight::SEMIBOLD)
             .child(slot(chevron(expanded, cx)))
             .child(slot(
                 Icon::new(IconName::LibraryBig)
                     .small()
                     .text_color(cx.theme().muted_foreground),
             ))
-            .child(self.row_label(&target, collection.name.clone()))
+            // Only the name is bold: on the row the weight would carry over
+            // into its context menu.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.row_label(&target, collection.name.clone())),
+            )
             .child(self.hover_actions(id, col, dir.clone(), cx))
             .when(!owned, |this| {
                 // Only the icon carries the path, so the tooltip stays clear of the context menu.
