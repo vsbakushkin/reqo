@@ -8,5 +8,5 @@ mod request;
 pub mod workspace;
 
 pub use env::{ENV_FILE, Environments, Variables, substitute};
-pub use exec::{Response, execute};
+pub use exec::{Response, added_headers, execute};
 pub use request::{METHODS, Request};

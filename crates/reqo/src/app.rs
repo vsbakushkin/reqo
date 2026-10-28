@@ -1869,14 +1869,54 @@ impl ReqoApp {
             })
     }
 
+    /// The headers reqo adds when sending, below the request's own: those it
+    /// doesn't set itself, so the list shows exactly what goes out on top.
+    fn render_added_headers(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let added = self
+            .selected
+            .map(|sel| reqo_core::added_headers(&self.edited_request(sel, cx), &self.variables()))
+            .unwrap_or_default();
+        let theme = cx.theme();
+        v_flex().when(!added.is_empty(), |this| {
+            this.flex_none()
+                .gap_1()
+                // Lines up with the text of the headers editor above.
+                .px(px(10.))
+                .py_2()
+                .border_t_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.muted_foreground)
+                        .child("ADDED WHEN SENDING"),
+                )
+                .child(v_flex().children(added.into_iter().map(|(name, value)| {
+                    div()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_size(theme.mono_font_size)
+                        .text_color(theme.muted_foreground)
+                        .child(format!("{name}: {value}"))
+                })))
+        })
+    }
+
     fn render_request(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match self.request_tab {
             0 => editor(&self.body, cx).into_any_element(),
-            _ => Textarea::new(&self.headers)
-                .bordered(false)
-                .h_full()
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_size(cx.theme().mono_font_size)
+            _ => v_flex()
+                .size_full()
+                .child(
+                    div().flex_1().min_h_0().child(
+                        Textarea::new(&self.headers)
+                            .bordered(false)
+                            .h_full()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_size(cx.theme().mono_font_size),
+                    ),
+                )
+                .child(self.render_added_headers(cx))
                 .into_any_element(),
         };
         v_flex()

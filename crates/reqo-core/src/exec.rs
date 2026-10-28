@@ -44,23 +44,31 @@ pub fn auto_headers(body: &str) -> Vec<(&'static str, String)> {
     headers
 }
 
+/// The [`auto_headers`] `request` goes out with on top of its own: those it
+/// doesn't set itself after substituting `vars`. Names compare case-insensitively.
+pub fn added_headers(request: &Request, vars: &Variables) -> Vec<(String, String)> {
+    let body = substitute(&request.body, vars);
+    auto_headers(&body)
+        .into_iter()
+        .filter(|(name, _)| {
+            !request
+                .headers
+                .keys()
+                .any(|set| substitute(set, vars).eq_ignore_ascii_case(name))
+        })
+        .map(|(name, value)| (name.to_string(), value))
+        .collect()
+}
+
 /// The headers `request` goes out with: its own, after substituting `vars`,
-/// then the [`auto_headers`] it doesn't set. Names compare case-insensitively.
-fn headers_to_send(request: &Request, body: &str, vars: &Variables) -> Vec<(String, String)> {
-    let mut headers: Vec<(String, String)> = request
+/// then the [`added_headers`].
+fn headers_to_send(request: &Request, vars: &Variables) -> Vec<(String, String)> {
+    request
         .headers
         .iter()
         .map(|(name, value)| (substitute(name, vars), substitute(value, vars)))
-        .collect();
-    for (name, value) in auto_headers(body) {
-        if !headers
-            .iter()
-            .any(|(set, _)| set.eq_ignore_ascii_case(name))
-        {
-            headers.push((name.to_string(), value));
-        }
-    }
-    headers
+        .chain(added_headers(request, vars))
+        .collect()
 }
 
 /// Sends `request` after substituting `vars`. Blocks until the body is read.
@@ -77,7 +85,7 @@ pub fn execute(request: &Request, vars: &Variables) -> Result<Response> {
         .method(request.method.as_str())
         .uri(&url);
     let body = substitute(&request.body, vars);
-    for (name, value) in headers_to_send(request, &body, vars) {
+    for (name, value) in headers_to_send(request, vars) {
         builder = builder.header(name, value);
     }
 
@@ -150,8 +158,9 @@ mod tests {
 
     #[test]
     fn json_body_gets_content_type() {
-        let request = Request::new("post");
-        let headers = headers_to_send(&request, r#"{"n": 1}"#, &Variables::new());
+        let mut request = Request::new("post");
+        request.body = r#"{"n": 1}"#.into();
+        let headers = headers_to_send(&request, &Variables::new());
         assert_eq!(header(&headers, "content-type"), Some("application/json"));
         assert!(header(&headers, "user-agent").unwrap().starts_with("reqo/"));
         assert_eq!(header(&headers, "accept"), Some("*/*"));
@@ -159,9 +168,10 @@ mod tests {
 
     #[test]
     fn plain_or_empty_body_gets_no_content_type() {
-        let request = Request::new("get");
+        let mut request = Request::new("get");
         for body in ["", "name=Ada"] {
-            let headers = headers_to_send(&request, body, &Variables::new());
+            request.body = body.into();
+            let headers = headers_to_send(&request, &Variables::new());
             assert_eq!(header(&headers, "content-type"), None, "body {body:?}");
         }
     }
@@ -174,7 +184,8 @@ mod tests {
             .insert("content-type".into(), "{{type}}".into());
         request.headers.insert("Accept".into(), "text/html".into());
         let vars = Variables::from_iter([("type".into(), "application/vnd.api+json".into())]);
-        let headers = headers_to_send(&request, "{}", &vars);
+        request.body = "{}".into();
+        let headers = headers_to_send(&request, &vars);
         assert_eq!(
             header(&headers, "Content-Type"),
             Some("application/vnd.api+json")
