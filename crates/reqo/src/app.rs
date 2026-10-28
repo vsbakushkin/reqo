@@ -1422,6 +1422,8 @@ impl ReqoApp {
         match &self.renaming {
             Some(renaming) if renaming.target == *target => div()
                 .flex_1()
+                // Selecting text with the mouse must not start dragging the row.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(Input::new(&renaming.input).xsmall())
                 .into_any_element(),
             _ => div()
