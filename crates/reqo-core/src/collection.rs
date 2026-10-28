@@ -1,11 +1,56 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
 use crate::Request;
 
 /// Extension of request files.
 pub const REQUEST_EXT: &str = ".req.toml";
+
+/// File in the collection root with what its requests share.
+pub const SETTINGS_FILE: &str = "reqo.collection.toml";
+
+/// What every request of a collection shares, read from `reqo.collection.toml`:
+///
+/// ```toml
+/// [headers]
+/// Authorization = "Bearer {{token}}"
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Settings {
+    /// Sent with every request, unless it sets a header of the same name.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub headers: IndexMap<String, String>,
+}
+
+impl Settings {
+    /// Loads the settings of the collection in `dir`; a missing file means none.
+    pub fn load(dir: &Path) -> Result<Self> {
+        let path = dir.join(SETTINGS_FILE);
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    /// Writes the settings to `dir`, or removes the file when there is nothing to keep.
+    pub fn save(&self, dir: &Path) -> Result<()> {
+        let path = dir.join(SETTINGS_FILE);
+        if *self == Self::default() {
+            if path.exists() {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("removing {}", path.display()))?;
+            }
+            return Ok(());
+        }
+        let text = toml::to_string(self)?;
+        std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+    }
+}
 
 /// A request together with the file it lives in.
 #[derive(Debug, Clone)]
@@ -246,6 +291,24 @@ pub(crate) fn slug(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_round_trip_and_empty_removes_file() {
+        let dir = std::env::temp_dir().join(format!("reqo-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).unwrap(), Settings::default());
+
+        let mut settings = Settings::default();
+        settings
+            .headers
+            .insert("Authorization".into(), "Bearer {{token}}".into());
+        settings.save(&dir).unwrap();
+        assert_eq!(Settings::load(&dir).unwrap(), settings);
+
+        Settings::default().save(&dir).unwrap();
+        assert!(!dir.join(SETTINGS_FILE).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn slugs() {

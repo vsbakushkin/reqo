@@ -65,6 +65,34 @@ impl Request {
             .join("\n")
     }
 
+    /// Headers of `inherited` (a collection's) that this request doesn't set
+    /// itself. Names compare case-insensitively.
+    pub fn inherited_headers<'a>(
+        &self,
+        inherited: &'a IndexMap<String, String>,
+    ) -> impl Iterator<Item = (&'a String, &'a String)> {
+        inherited.iter().filter(|(name, _)| {
+            !self
+                .headers
+                .keys()
+                .any(|own| own.eq_ignore_ascii_case(name))
+        })
+    }
+
+    /// The request with the [`inherited_headers`](Self::inherited_headers)
+    /// ahead of its own, as it is sent.
+    pub fn with_inherited(&self, inherited: &IndexMap<String, String>) -> Request {
+        let mut headers: IndexMap<String, String> = self
+            .inherited_headers(inherited)
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        headers.extend(self.headers.clone());
+        Request {
+            headers,
+            ..self.clone()
+        }
+    }
+
     /// Parses `Name: value` lines. Blank lines and lines starting with `#` are skipped.
     pub fn parse_headers(text: &str) -> IndexMap<String, String> {
         text.lines()
@@ -91,6 +119,23 @@ mod tests {
         let mut request = Request::new("r");
         request.headers = headers;
         assert_eq!(request.headers_text(), "Accept: application/json\nX-Id: 42");
+    }
+
+    #[test]
+    fn own_headers_win_over_inherited() {
+        let inherited = Request::parse_headers("Authorization: Bearer {{token}}\nX-Team: core");
+        let mut request = Request::new("r");
+        request.headers = Request::parse_headers("x-team: web\nAccept: text/html");
+
+        let kept: Vec<_> = request.inherited_headers(&inherited).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, "Authorization");
+
+        let sent = request.with_inherited(&inherited);
+        assert_eq!(
+            sent.headers_text(),
+            "Authorization: Bearer {{token}}\nx-team: web\nAccept: text/html"
+        );
     }
 
     #[test]

@@ -77,6 +77,8 @@ struct Collection {
     folders: Vec<PathBuf>,
     /// Overrides for the workspace environments.
     envs: Environments,
+    /// What every request of the collection shares, like headers.
+    settings: collection::Settings,
 }
 
 /// A request in the sidebar: indices of its collection and of its entry there.
@@ -341,6 +343,10 @@ impl ReqoApp {
                     errors.push(format!("{err:#}").into());
                     Environments::default()
                 });
+                let settings = collection::Settings::load(&dir).unwrap_or_else(|err| {
+                    errors.push(format!("{err:#}").into());
+                    collection::Settings::default()
+                });
                 Collection {
                     name: c.name.clone().into(),
                     folders: collection::folders(&dir),
@@ -348,6 +354,7 @@ impl ReqoApp {
                     dir,
                     entries,
                     envs,
+                    settings,
                 }
             })
             .collect();
@@ -446,6 +453,12 @@ impl ReqoApp {
             headers: Request::parse_headers(&self.headers.read(cx).value()),
             body: self.body.read(cx).value().to_string(),
         }
+    }
+
+    /// The request as it is sent: the edited one with its collection's headers.
+    fn sent_request(&self, sel: Sel, cx: &App) -> Request {
+        self.edited_request(sel, cx)
+            .with_inherited(&self.collections[sel.col].settings.headers)
     }
 
     fn save(&mut self, _: &SaveRequest, window: &mut Window, cx: &mut Context<Self>) {
@@ -1088,6 +1101,79 @@ impl ReqoApp {
         });
     }
 
+    /// Opens the headers every request of collection `col` is sent with.
+    fn edit_collection_headers(&mut self, col: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(collection) = self.collections.get(col) else {
+            return;
+        };
+        let title = format!("Headers of “{}”", collection.name);
+        let dir = collection.dir.clone();
+        let mut current = Request::new("");
+        current.headers = collection.settings.headers.clone();
+        let input = cx.new(|cx| {
+            let mut state =
+                TextareaState::new(window, cx).placeholder("Authorization: Bearer {{token}}");
+            state.set_value(current.headers_text(), window, cx);
+            state
+        });
+        window.on_next_frame({
+            let input = input.clone();
+            move |window, cx| input.update(cx, |state, cx| state.focus(window, cx))
+        });
+        let this = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, cx| {
+            let this = this.clone();
+            let input = input.clone();
+            let dir = dir.clone();
+            alert
+                .title(title.clone())
+                .w(px(560.))
+                .child(
+                    v_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    "Sent with every request of the collection, one Name: value \
+                                     per line. A request's own header of the same name wins; \
+                                     {{variables}} come from the environment.",
+                                ),
+                        )
+                        .child(
+                            div().h(px(180.)).child(
+                                Textarea::new(&input)
+                                    .h_full()
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .text_size(cx.theme().mono_font_size),
+                            ),
+                        ),
+                )
+                .button_props(DialogButtonProps::default().ok_text("Save"))
+                .show_cancel(true)
+                .on_ok(move |_, window, cx| {
+                    let headers = Request::parse_headers(&input.read(cx).value());
+                    let dir = dir.clone();
+                    this.update(cx, |this, cx| {
+                        let settings = collection::Settings { headers };
+                        if let Err(err) = settings.save(&dir) {
+                            notify_error(err, window, cx);
+                            return;
+                        }
+                        if let Some(collection) = this.collections.iter_mut().find(|c| c.dir == dir)
+                        {
+                            collection.settings = settings;
+                        }
+                        cx.notify();
+                    })
+                    .ok();
+                    true
+                })
+        });
+    }
+
     /// Re-reads the environments file in `dir`, the workspace's or a collection's.
     fn reload_envs(&mut self, dir: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let envs = Environments::load(dir).unwrap_or_else(|err| {
@@ -1113,7 +1199,7 @@ impl ReqoApp {
     fn send(&mut self, _: &SendRequest, window: &mut Window, cx: &mut Context<Self>) {
         let Some(sel) = self.selected else { return };
         self.save(&SaveRequest, window, cx);
-        let request = self.edited_request(sel, cx);
+        let request = self.sent_request(sel, cx);
         let vars = self.variables();
 
         self.in_flight = Some(cx.spawn_in(window, async move |this, cx| {
@@ -1603,6 +1689,12 @@ impl ReqoApp {
                 ))
                 .item(menu_item(
                     &this,
+                    "Edit headers",
+                    Some(IconName::FileText),
+                    move |this, window, cx| this.edit_collection_headers(col, window, cx),
+                ))
+                .item(menu_item(
+                    &this,
                     "Edit environments",
                     Some(IconName::Settings2),
                     move |this, window, cx| this.edit_environments(&d3, window, cx),
@@ -1869,37 +1961,27 @@ impl ReqoApp {
             })
     }
 
-    /// The headers reqo adds when sending, below the request's own: those it
-    /// doesn't set itself, so the list shows exactly what goes out on top.
-    fn render_added_headers(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let added = self
-            .selected
-            .map(|sel| reqo_core::added_headers(&self.edited_request(sel, cx), &self.variables()))
-            .unwrap_or_default();
-        let theme = cx.theme();
-        v_flex().when(!added.is_empty(), |this| {
-            this.flex_none()
-                .gap_1()
-                // Lines up with the text of the headers editor above.
-                .px(px(10.))
-                .py_2()
-                .border_t_1()
-                .border_color(theme.border)
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.muted_foreground)
-                        .child("ADDED WHEN SENDING"),
-                )
-                .child(v_flex().children(added.into_iter().map(|(name, value)| {
-                    div()
-                        .font_family(theme.mono_font_family.clone())
-                        .text_size(theme.mono_font_size)
-                        .text_color(theme.muted_foreground)
-                        .child(format!("{name}: {value}"))
-                })))
-        })
+    /// The headers that go out on top of the request's own, below them: its
+    /// collection's, then those reqo adds. Each list leaves out what the
+    /// request sets itself, so together they show exactly what is sent.
+    fn render_implicit_headers(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (inherited, added) = match self.selected {
+            Some(sel) => {
+                let request = self.edited_request(sel, cx);
+                let inherited: Vec<(String, String)> = request
+                    .inherited_headers(&self.collections[sel.col].settings.headers)
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect();
+                let added =
+                    reqo_core::added_headers(&self.sent_request(sel, cx), &self.variables());
+                (inherited, added)
+            }
+            None => Default::default(),
+        };
+        v_flex()
+            .flex_none()
+            .children(header_list("FROM COLLECTION", inherited, cx))
+            .children(header_list("ADDED WHEN SENDING", added, cx))
     }
 
     fn render_request(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1916,7 +1998,7 @@ impl ReqoApp {
                             .text_size(cx.theme().mono_font_size),
                     ),
                 )
-                .child(self.render_added_headers(cx))
+                .child(self.render_implicit_headers(cx))
                 .into_any_element(),
         };
         v_flex()
@@ -2135,6 +2217,37 @@ impl Render for ReqoApp {
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }
+}
+
+/// A muted, read-only list of `headers` under `title`, lined up with the text
+/// of the headers editor; nothing when the list is empty.
+fn header_list(title: &'static str, headers: Vec<(String, String)>, cx: &App) -> Option<Div> {
+    if headers.is_empty() {
+        return None;
+    }
+    let theme = cx.theme();
+    Some(
+        v_flex()
+            .gap_1()
+            .px(px(10.))
+            .py_2()
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.muted_foreground)
+                    .child(title),
+            )
+            .child(v_flex().children(headers.into_iter().map(|(name, value)| {
+                div()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_size(theme.mono_font_size)
+                    .text_color(theme.muted_foreground)
+                    .child(format!("{name}: {value}"))
+            }))),
+    )
 }
 
 /// A menu item that runs `action` on the app.
