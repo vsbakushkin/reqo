@@ -1212,52 +1212,48 @@ impl ReqoApp {
             .border_r_1()
             .border_color(theme.sidebar_border)
             .child(
+                // The workspace and its environment read as a title with a
+                // subtitle; the actions share the title's line.
                 v_flex()
                     .h(px(URL_BAR_HEIGHT + TAB_ROW_HEIGHT))
                     .flex_none()
+                    .justify_center()
+                    .gap_0p5()
+                    .px_1()
                     .border_b_1()
                     .border_color(theme.sidebar_border)
                     .child(
-                h_flex()
-                    .h(px(URL_BAR_HEIGHT))
-                    .flex_none()
-                    .px_1()
-                    .gap_1()
-                    .justify_between()
-                    .child(div().min_w_0().child(self.render_workspace_menu(cx)))
-                    .child(
                         h_flex()
+                            .gap_1()
+                            .justify_between()
+                            .child(div().min_w_0().child(self.render_workspace_menu(cx)))
                             .child(
-                                Button::new("reload")
-                                    .cursor_pointer()
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::RefreshCw)
-                                    .tooltip("Reload from disk (Ctrl+R)")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.reload(&Reload, window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("settings")
-                                    .cursor_pointer()
-                                    .ghost()
-                                    .small()
-                                    .icon(IconName::Settings)
-                                    .tooltip("Settings (Ctrl+,)")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_settings(&OpenSettings, window, cx)
-                                    })),
+                                h_flex()
+                                    .child(
+                                        Button::new("reload")
+                                            .cursor_pointer()
+                                            .ghost()
+                                            .small()
+                                            .icon(IconName::RefreshCw)
+                                            .tooltip("Reload from disk (Ctrl+R)")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.reload(&Reload, window, cx)
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("settings")
+                                            .cursor_pointer()
+                                            .ghost()
+                                            .small()
+                                            .icon(IconName::Settings)
+                                            .tooltip("Settings (Ctrl+,)")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_settings(&OpenSettings, window, cx)
+                                            })),
+                                    ),
                             ),
-                    ),
                     )
-                    .child(
-                        h_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .px_1()
-                            .child(self.render_env_picker(cx)),
-                    ),
+                    .child(h_flex().min_w_0().child(self.render_env_picker(cx))),
             )
             .child(
                 h_flex()
@@ -1382,6 +1378,8 @@ impl ReqoApp {
             .small()
             .icon(IconName::Layers)
             .label(SharedString::from(self.workspace.name.clone()))
+            .font_weight(FontWeight::SEMIBOLD)
+            .dropdown_caret(true)
             .tooltip("Switch workspace")
             .dropdown_menu(move |menu: PopupMenu, _, _| {
                 let mut menu = menu.min_w(px(220.)).label("Workspaces");
@@ -1831,12 +1829,13 @@ impl ReqoApp {
             ),
         };
 
-        // Styled like the workspace switcher above it: both pick what the
-        // sidebar and the requests work in.
+        // Styled like the workspace switcher above it, but muted: it is the
+        // workspace's subtitle.
         Button::new("environment")
             .cursor_pointer()
             .ghost()
             .small()
+            .text_color(cx.theme().muted_foreground)
             .icon(icon)
             .label(label)
             .dropdown_caret(true)
