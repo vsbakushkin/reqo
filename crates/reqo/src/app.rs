@@ -778,6 +778,7 @@ impl ReqoApp {
         let this = cx.entity().downgrade();
         let (title, description) = (SharedString::from(title), SharedString::from(description));
         let on_ok = Rc::new(on_ok);
+        self.focus_for_dialog(window, cx);
         window.open_alert_dialog(cx, move |alert, _, _| {
             let this = this.clone();
             let on_ok = on_ok.clone();
@@ -822,6 +823,7 @@ impl ReqoApp {
             }
         });
         let this = cx.entity().downgrade();
+        self.focus_for_dialog(window, cx);
         window.open_alert_dialog(cx, move |alert, _, _| {
             let this = this.clone();
             let on_ok = on_ok.clone();
@@ -1093,6 +1095,7 @@ impl ReqoApp {
             window,
             |this, _, EnvEditorEvent::Changed(dir), window, cx| this.reload_envs(dir, window, cx),
         ));
+        self.focus_for_dialog(window, cx);
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
                 .title("Environments")
@@ -1121,6 +1124,7 @@ impl ReqoApp {
             move |window, cx| input.update(cx, |state, cx| state.focus(window, cx))
         });
         let this = cx.entity().downgrade();
+        self.focus_for_dialog(window, cx);
         window.open_alert_dialog(cx, move |alert, _, cx| {
             let this = this.clone();
             let input = input.clone();
@@ -1242,8 +1246,16 @@ impl ReqoApp {
         cx.notify();
     }
 
+    /// Focuses the app before a dialog opens. A dialog gives focus back to
+    /// what had it when it opened; that is often the menu it was opened from,
+    /// gone by the time it closes, which would leave the app's shortcuts dead.
+    fn focus_for_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
+    }
+
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
         let settings = self.settings.clone();
+        self.focus_for_dialog(window, cx);
         window.open_dialog(cx, move |dialog, _, _| {
             dialog.title("Settings").w(px(520.)).child(settings.clone())
         });
