@@ -328,6 +328,7 @@ impl EnvEditor {
             .child(
                 div().p_1().border_t_1().border_color(theme.border).child(
                     Button::new("add-env")
+                        .when(self.load_error.is_none(), |this| this.cursor_pointer())
                         .ghost()
                         .small()
                         .w_full()
@@ -374,6 +375,7 @@ impl EnvEditor {
                     .child(div().flex_1().child(Input::new(&self.name).small()))
                     .child(
                         Button::new("delete-env")
+                            .cursor_pointer()
                             .ghost()
                             .small()
                             .icon(IconName::Trash)
@@ -414,6 +416,7 @@ impl EnvEditor {
                             )
                             .child(
                                 Button::new(("remove-var", ix))
+                                    .cursor_pointer()
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Trash)
@@ -426,6 +429,7 @@ impl EnvEditor {
                     .child(
                         h_flex().child(
                             Button::new("add-var")
+                                .cursor_pointer()
                                 .ghost()
                                 .small()
                                 .icon(IconName::Plus)
@@ -458,10 +462,11 @@ impl Render for EnvEditor {
                     .child(
                         div()
                             .w(px(300.))
-                            .child(Select::new(&self.scope_select).small()),
+                            .child(Select::new(&self.scope_select).cursor_pointer().small()),
                     )
                     .child(
                         Button::new("open-env-file")
+                            .cursor_pointer()
                             .ghost()
                             .small()
                             .icon(IconName::FileText)

@@ -114,19 +114,19 @@ impl Render for Settings {
             .child(row(
                 "Mode",
                 "System follows the desktop's light or dark setting.",
-                Select::new(&self.mode).small(),
+                Select::new(&self.mode).cursor_pointer().small(),
                 cx,
             ))
             .child(row(
                 "Dark theme",
                 "Used in dark mode.",
-                Select::new(&self.dark_theme).small(),
+                Select::new(&self.dark_theme).cursor_pointer().small(),
                 cx,
             ))
             .child(row(
                 "Light theme",
                 "Used in light mode.",
-                Select::new(&self.light_theme).small(),
+                Select::new(&self.light_theme).cursor_pointer().small(),
                 cx,
             ))
     }

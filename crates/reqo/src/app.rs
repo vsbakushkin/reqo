@@ -1221,6 +1221,7 @@ impl ReqoApp {
                         h_flex()
                             .child(
                                 Button::new("reload")
+                                    .cursor_pointer()
                                     .ghost()
                                     .small()
                                     .icon(IconName::RefreshCw)
@@ -1231,6 +1232,7 @@ impl ReqoApp {
                             )
                             .child(
                                 Button::new("settings")
+                                    .cursor_pointer()
                                     .ghost()
                                     .small()
                                     .icon(IconName::Settings)
@@ -1266,6 +1268,7 @@ impl ReqoApp {
                         h_flex()
                             .child(
                                 Button::new("new-collection")
+                                    .cursor_pointer()
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::FolderPlus)
@@ -1276,6 +1279,7 @@ impl ReqoApp {
                             )
                             .child(
                                 Button::new("add-folder")
+                                    .cursor_pointer()
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::FolderInput)
@@ -1286,6 +1290,7 @@ impl ReqoApp {
                             )
                             .child(
                                 Button::new("new-request")
+                                    .cursor_pointer()
                                     .ghost()
                                     .xsmall()
                                     .icon(IconName::Plus)
@@ -1364,6 +1369,7 @@ impl ReqoApp {
         let workspace_dir = self.workspace.dir.clone();
 
         Button::new("workspace")
+            .cursor_pointer()
             .ghost()
             .small()
             .icon(IconName::Layers)
@@ -1493,6 +1499,7 @@ impl ReqoApp {
             .group_hover(group.clone(), |style| style.opacity(1.))
             .child(
                 Button::new(SharedString::from(format!("{group}:new-request")))
+                    .cursor_pointer()
                     .ghost()
                     .xsmall()
                     .icon(IconName::Plus)
@@ -1504,6 +1511,7 @@ impl ReqoApp {
             )
             .child(
                 Button::new(SharedString::from(format!("{group}:new-folder")))
+                    .cursor_pointer()
                     .ghost()
                     .xsmall()
                     .icon(IconName::FolderPlus)
@@ -1771,11 +1779,12 @@ impl ReqoApp {
                 div()
                     .w(px(120.))
                     .flex_none()
-                    .child(Select::new(&self.method)),
+                    .child(Select::new(&self.method).cursor_pointer()),
             )
             .child(div().flex_1().child(Input::new(&self.url)))
             .child(
                 Button::new("send")
+                    .cursor_pointer()
                     .primary()
                     .icon(IconName::Send)
                     // Only the icon turns into a spinner: a different label would
@@ -1813,6 +1822,7 @@ impl ReqoApp {
         // Styled like the workspace switcher above it: both pick what the
         // sidebar and the requests work in.
         Button::new("environment")
+            .cursor_pointer()
             .ghost()
             .small()
             .icon(icon)
@@ -1870,8 +1880,8 @@ impl ReqoApp {
                             this.request_tab = *ix;
                             cx.notify();
                         }))
-                        .child(Tab::new().label("Body"))
-                        .child(Tab::new().label("Headers")),
+                        .child(Tab::new().label("Body").cursor_pointer())
+                        .child(Tab::new().label("Headers").cursor_pointer()),
                 ),
             )
             .child(div().flex_1().min_h_0().child(content))
@@ -1942,8 +1952,8 @@ impl ReqoApp {
                                 this.response_tab = *ix;
                                 cx.notify();
                             }))
-                            .child(Tab::new().label("Response"))
-                            .child(Tab::new().label("Headers")),
+                            .child(Tab::new().label("Response").cursor_pointer())
+                            .child(Tab::new().label("Headers").cursor_pointer()),
                     )
                     .child(div().text_sm().min_w_0().child(summary)),
             )
@@ -1970,6 +1980,7 @@ impl ReqoApp {
                     .when(has_collections, |this| {
                         this.child(
                             Button::new("empty-new-request")
+                                .cursor_pointer()
                                 .icon(IconName::Plus)
                                 .label("New request")
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1980,6 +1991,7 @@ impl ReqoApp {
                     .when(!has_collections, |this| {
                         this.child(
                             Button::new("empty-new-collection")
+                                .cursor_pointer()
                                 .icon(IconName::FolderPlus)
                                 .label("New collection")
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1988,6 +2000,7 @@ impl ReqoApp {
                         )
                         .child(
                             Button::new("empty-add-folder")
+                                .cursor_pointer()
                                 .icon(IconName::FolderInput)
                                 .label("Add folder…")
                                 .on_click(
