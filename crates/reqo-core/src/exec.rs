@@ -31,6 +31,38 @@ impl Response {
     }
 }
 
+/// Headers reqo adds to a request with `body` (already substituted), unless
+/// the request sets one of the same name itself.
+pub fn auto_headers(body: &str) -> Vec<(&'static str, String)> {
+    let mut headers = vec![
+        ("User-Agent", format!("reqo/{}", env!("CARGO_PKG_VERSION"))),
+        ("Accept", "*/*".to_string()),
+    ];
+    if serde_json::from_str::<serde_json::Value>(body).is_ok() {
+        headers.push(("Content-Type", "application/json".to_string()));
+    }
+    headers
+}
+
+/// The headers `request` goes out with: its own, after substituting `vars`,
+/// then the [`auto_headers`] it doesn't set. Names compare case-insensitively.
+fn headers_to_send(request: &Request, body: &str, vars: &Variables) -> Vec<(String, String)> {
+    let mut headers: Vec<(String, String)> = request
+        .headers
+        .iter()
+        .map(|(name, value)| (substitute(name, vars), substitute(value, vars)))
+        .collect();
+    for (name, value) in auto_headers(body) {
+        if !headers
+            .iter()
+            .any(|(set, _)| set.eq_ignore_ascii_case(name))
+        {
+            headers.push((name.to_string(), value));
+        }
+    }
+    headers
+}
+
 /// Sends `request` after substituting `vars`. Blocks until the body is read.
 pub fn execute(request: &Request, vars: &Variables) -> Result<Response> {
     let url = substitute(request.url.trim(), vars);
@@ -44,8 +76,9 @@ pub fn execute(request: &Request, vars: &Variables) -> Result<Response> {
     let mut builder = http::Request::builder()
         .method(request.method.as_str())
         .uri(&url);
-    for (name, value) in &request.headers {
-        builder = builder.header(substitute(name, vars), substitute(value, vars));
+    let body = substitute(&request.body, vars);
+    for (name, value) in headers_to_send(request, &body, vars) {
+        builder = builder.header(name, value);
     }
 
     let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -56,7 +89,6 @@ pub fn execute(request: &Request, vars: &Variables) -> Result<Response> {
         .into();
 
     let started = Instant::now();
-    let body = substitute(&request.body, vars);
     let mut response = if body.is_empty() {
         agent.run(builder.body(())?)
     } else {
@@ -108,6 +140,51 @@ fn format_body(bytes: &[u8]) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(set, _)| set.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[test]
+    fn json_body_gets_content_type() {
+        let request = Request::new("post");
+        let headers = headers_to_send(&request, r#"{"n": 1}"#, &Variables::new());
+        assert_eq!(header(&headers, "content-type"), Some("application/json"));
+        assert!(header(&headers, "user-agent").unwrap().starts_with("reqo/"));
+        assert_eq!(header(&headers, "accept"), Some("*/*"));
+    }
+
+    #[test]
+    fn plain_or_empty_body_gets_no_content_type() {
+        let request = Request::new("get");
+        for body in ["", "name=Ada"] {
+            let headers = headers_to_send(&request, body, &Variables::new());
+            assert_eq!(header(&headers, "content-type"), None, "body {body:?}");
+        }
+    }
+
+    #[test]
+    fn own_headers_win_over_auto_ones() {
+        let mut request = Request::new("post");
+        request
+            .headers
+            .insert("content-type".into(), "{{type}}".into());
+        request.headers.insert("Accept".into(), "text/html".into());
+        let vars = Variables::from_iter([("type".into(), "application/vnd.api+json".into())]);
+        let headers = headers_to_send(&request, "{}", &vars);
+        assert_eq!(
+            header(&headers, "Content-Type"),
+            Some("application/vnd.api+json")
+        );
+        assert_eq!(header(&headers, "accept"), Some("text/html"));
+        let accepts = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("accept"));
+        assert_eq!(accepts.count(), 1);
+    }
 
     /// Talks to httpbin.org: `cargo test -p reqo-core -- --ignored`.
     #[test]
