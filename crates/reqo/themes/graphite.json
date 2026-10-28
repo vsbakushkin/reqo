@@ -13,7 +13,7 @@
         "input.border": "#3a3a3a",
         "ring": "#d9d9d980",
         "caret": "#d9d9d9",
-        "selection.background": "#3a3a3a",
+        "selection.background": "#d9d9d9",
         "overlay": "#00000066",
         "accent.background": "#2a2a2a",
         "accent.foreground": "#d9d9d9",
