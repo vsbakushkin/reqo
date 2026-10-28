@@ -109,6 +109,10 @@ fn main() {
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1200.), px(800.)), cx)),
+                window_min_size: Some(size(
+                    px(app::WINDOW_MIN_SIZE.0),
+                    px(app::WINDOW_MIN_SIZE.1),
+                )),
                 app_id: Some("reqo".into()),
                 ..Default::default()
             };

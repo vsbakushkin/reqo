@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -49,6 +50,15 @@ pub const DEFAULT_WORKSPACE: &str = "My Workspace";
 const TREE_ROW_HEIGHT: f32 = 26.;
 const TREE_INDENT: f32 = 16.;
 const TREE_PAD: f32 = 4.;
+
+/// Panel size limits, in pixels: below them the content runs into itself.
+const SIDEBAR_WIDTH: Range<f32> = 220.0..480.0;
+const MAIN_MIN_WIDTH: f32 = 420.;
+const REQUEST_MIN_HEIGHT: f32 = 120.;
+const RESPONSE_MIN_HEIGHT: f32 = 120.;
+
+/// The smallest window that still fits every panel at its minimum size.
+pub const WINDOW_MIN_SIZE: (f32, f32) = (SIDEBAR_WIDTH.start + MAIN_MIN_WIDTH, 360.);
 
 type MethodSelect = SelectState<Vec<&'static str>>;
 
@@ -2001,10 +2011,15 @@ impl Render for ReqoApp {
                             .child(
                                 resizable_panel()
                                     .size(px(300.))
+                                    .size_range(px(REQUEST_MIN_HEIGHT)..Pixels::MAX)
                                     .flex_none()
                                     .child(self.render_request(cx)),
                             )
-                            .child(self.render_response(cx).into_any_element()),
+                            .child(
+                                resizable_panel()
+                                    .size_range(px(RESPONSE_MIN_HEIGHT)..Pixels::MAX)
+                                    .child(self.render_response(cx)),
+                            ),
                     ),
                 )
                 .into_any_element()
@@ -2033,10 +2048,15 @@ impl Render for ReqoApp {
                     .child(
                         resizable_panel()
                             .size(px(260.))
+                            .size_range(px(SIDEBAR_WIDTH.start)..px(SIDEBAR_WIDTH.end))
                             .flex_none()
                             .child(self.render_sidebar(cx)),
                     )
-                    .child(main),
+                    .child(
+                        resizable_panel()
+                            .size_range(px(MAIN_MIN_WIDTH)..Pixels::MAX)
+                            .child(main),
+                    ),
             )
             // gpui-kit's Root keeps overlays but leaves drawing them to the view.
             .children(Root::render_sheet_layer(window, cx))
